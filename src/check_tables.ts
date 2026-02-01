@@ -15,6 +15,8 @@ const pool = new Pool({
 async function checkTables() {
     const client = await pool.connect()
     try {
+        const dbRes = await client.query('SELECT current_database(), current_user');
+        console.log(`Connected to DB: ${dbRes.rows[0].current_database} as ${dbRes.rows[0].current_user}`);
         const res = await client.query(`
       SELECT table_name, column_name, data_type 
       FROM information_schema.columns 

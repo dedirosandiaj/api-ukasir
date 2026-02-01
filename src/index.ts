@@ -44,7 +44,7 @@ app.get('/api/validate-token', async (req: Request, res: Response) => {
     let client;
     try {
         client = await pool.connect();
-        const query = 'SELECT token_number, register_date, status_active FROM ukasir-offline WHERE token_number = $1';
+        const query = 'SELECT token_number, register_date, status_active FROM ukasir_token WHERE token_number = $1';
         const result = await client.query(query, [token]);
 
         if (result.rows.length > 0) {
