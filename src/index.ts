@@ -30,8 +30,8 @@ app.get('/', (req: Request, res: Response) => {
     });
 });
 
-app.get('/api/validate-token', async (req: Request, res: Response) => {
-    const token = req.query.token as string;
+app.post('/api/validate-token', async (req: Request, res: Response) => {
+    const token = req.body.token;
 
     if (!token) {
         return res.status(400).json({ error: 'Token is required' });
