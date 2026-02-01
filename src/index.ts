@@ -17,16 +17,11 @@ const pool = new Pool({
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    ssl: false
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    connectionTimeoutMillis: 5000 // Fail fast after 5 seconds
 })
 
-// Test connection on startup (optional, good for debugging logs)
-pool.connect().then(client => {
-    console.log('Connected to Postgres')
-    client.release()
-}).catch(err => {
-    console.error('Failed to connect to Postgres', err)
-})
+// Removed top-level pool.connect() to prevent hanging during serverless function initialization
 
 app.get('/', (c) => {
     return c.json({
