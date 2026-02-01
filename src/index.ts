@@ -1,15 +1,15 @@
-import { Hono } from 'hono'
-import { cors } from 'hono/cors'
-import { handle } from 'hono/vercel'
-import { serve } from '@hono/node-server'
-import { Pool } from 'pg'
-import * as dotenv from 'dotenv'
+import express, { Request, Response } from 'express';
+import cors from 'cors';
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
 
-dotenv.config()
+dotenv.config();
 
-const app = new Hono().basePath('/api')
+const app = express();
+const port = process.env.PORT || 3000;
 
-app.use('/*', cors())
+app.use(cors());
+app.use(express.json());
 
 const pool = new Pool({
     host: process.env.DB_HOST,
@@ -19,69 +19,62 @@ const pool = new Pool({
     database: process.env.DB_NAME,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
     connectionTimeoutMillis: 5000 // Fail fast after 5 seconds
-})
+});
 
-// Removed top-level pool.connect() to prevent hanging during serverless function initialization
+// Removed top-level pool.connect() to prevent hanging
 
-app.get('/', (c) => {
-    return c.json({
-        message: 'Ukasir Offline API is running',
+app.get('/', (req: Request, res: Response) => {
+    res.json({
+        message: 'Ukasir Offline API is running (Express)',
         version: '1.0.0'
-    })
-})
+    });
+});
 
-app.get('/validate-token', async (c) => {
-    const token = c.req.query('token')
+app.get('/api/validate-token', async (req: Request, res: Response) => {
+    const token = req.query.token as string;
 
     if (!token) {
-        return c.json({ error: 'Token is required' }, 400)
+        return res.status(400).json({ error: 'Token is required' });
     }
 
     // Basic format validation (9999-0000-1111-2222)
     const tokenRegex = /^\d{4}-\d{4}-\d{4}-\d{4}$/;
-    if (!tokenRegex.test(token)) {
-        // We can be lenient or strict. User provided example 9999-0000-1111-2222.
-        // Let's just warn or allow loose search if they want? 
-        // Strict is safer.
-    }
+    // if (!tokenRegex.test(token)) { ... } 
 
     let client;
     try {
-        client = await pool.connect()
-        // Table found is named "token_number"
-        const query = 'SELECT token_number, register_date, status_active FROM token_number WHERE token_number = $1'
-        const result = await client.query(query, [token])
+        client = await pool.connect();
+        const query = 'SELECT token_number, register_date, status_active FROM ukasir-offline WHERE token_number = $1';
+        const result = await client.query(query, [token]);
 
         if (result.rows.length > 0) {
-            return c.json({
+            return res.json({
                 valid: true,
                 data: result.rows[0]
-            })
+            });
         } else {
-            return c.json({
+            return res.status(404).json({
                 valid: false,
                 message: 'Token not found or inactive'
-            }, 404)
+            });
         }
     } catch (error: any) {
-        console.error('Database error:', error)
-        return c.json({
+        console.error('Database error:', error);
+        return res.status(500).json({
             error: 'Internal Server Error',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        }, 500)
+        });
     } finally {
-        if (client) client.release()
+        if (client) client.release();
     }
-})
+});
+
+// Vercel requires exporting the app
+export default app;
 
 // Local development
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-    const port = 3000
-    console.log(`Server is running on http://localhost:${port}`)
-    serve({
-        fetch: app.fetch,
-        port
-    })
+    app.listen(port, () => {
+        console.log(`Server is running on http://localhost:${port}`);
+    });
 }
-
-export default handle(app)
