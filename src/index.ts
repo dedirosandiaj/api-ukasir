@@ -138,9 +138,9 @@ app.post('/api/update-device', async (req: Request, res: Response) => {
 // Vercel requires exporting the app
 export default app;
 
-// Local development
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+// Local development and non-Vercel deployments (like Coolify)
+if (!process.env.VERCEL) {
     app.listen(port, () => {
-        console.log(`Server is running on http://localhost:${port}`);
+        console.log(`Server is running on port ${port}`);
     });
 }
