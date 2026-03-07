@@ -1,15 +1,87 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+// API Authentication Config
+const API_KEY = process.env.API_KEY;
+const API_SECRET = process.env.API_SECRET;
+
+if (!API_KEY || !API_SECRET) {
+    console.error('ERROR: API_KEY and API_SECRET must be set in environment variables');
+    process.exit(1);
+}
+
+// HMAC Signature Verification Middleware
+const verifyApiAuth = (req: Request, res: Response, next: NextFunction): void => {
+    const apiKey = req.headers['x-api-key'] as string;
+    const timestamp = req.headers['x-timestamp'] as string;
+    const signature = req.headers['x-signature'] as string;
+
+    if (!apiKey || !timestamp || !signature) {
+        res.status(401).json({ error: 'Missing authentication headers' });
+        return;
+    }
+
+    // Verify API Key
+    if (apiKey !== API_KEY) {
+        res.status(401).json({ error: 'Invalid API key' });
+        return;
+    }
+
+    // Check timestamp (prevent replay attacks - 5 min window)
+    const now = Math.floor(Date.now() / 1000);
+    const reqTime = parseInt(timestamp, 10);
+    if (isNaN(reqTime) || Math.abs(now - reqTime) > 300) {
+        res.status(401).json({ error: 'Request expired or invalid timestamp' });
+        return;
+    }
+
+    // Verify HMAC Signature
+    const bodyString = JSON.stringify(req.body || {});
+    const payload = `${apiKey}:${timestamp}:${bodyString}`;
+    const expectedSig = crypto
+        .createHmac('sha256', API_SECRET!)
+        .update(payload)
+        .digest('hex');
+
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+        res.status(401).json({ error: 'Invalid signature' });
+        return;
+    }
+
+    next();
+};
+
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Security middleware
+app.use(helmet());
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10kb' })); // Limit body size
+
+// Rate limiting - 100 requests per 15 minutes per IP
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { error: 'Too many requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+app.use(limiter);
+
+// Stricter rate limit for token validation (10 per minute)
+const validateTokenLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    message: { error: 'Too many validation attempts, please try again later.' }
+});
 
 const pool = new Pool({
     host: process.env.DB_HOST,
@@ -30,16 +102,37 @@ app.get('/', (req: Request, res: Response) => {
     });
 });
 
-app.post('/api/validate-token', async (req: Request, res: Response) => {
+// Input sanitization helpers
+const sanitizeString = (input: any, maxLength: number = 255): string | null => {
+    if (typeof input !== 'string') return null;
+    const trimmed = input.trim();
+    if (trimmed.length === 0 || trimmed.length > maxLength) return null;
+    // Remove control characters and potential XSS
+    return trimmed.replace(/[<>\"']/g, '');
+};
+
+const isValidTokenFormat = (token: any): boolean => {
+    if (typeof token !== 'string') return false;
+    return /^\d{4}-\d{4}-\d{4}-\d{4}$/.test(token);
+};
+
+const isValidDeviceId = (deviceId: any): boolean => {
+    if (typeof deviceId !== 'string') return false;
+    // Allow alphanumeric, hyphens, underscores - max 100 chars
+    return /^[a-zA-Z0-9_-]{1,100}$/.test(deviceId);
+};
+
+app.post('/api/validate-token', verifyApiAuth, validateTokenLimiter, async (req: Request, res: Response) => {
     const token = req.body.token;
 
     if (!token) {
         return res.status(400).json({ error: 'Token is required' });
     }
 
-    // Basic format validation (9999-0000-1111-2222)
-    const tokenRegex = /^\d{4}-\d{4}-\d{4}-\d{4}$/;
-    // if (!tokenRegex.test(token)) { ... } 
+    // Token format validation
+    if (!isValidTokenFormat(token)) {
+        return res.status(400).json({ error: 'Invalid token format. Expected: XXXX-XXXX-XXXX-XXXX' });
+    } 
 
     let client;
     try {
@@ -69,12 +162,26 @@ app.post('/api/validate-token', async (req: Request, res: Response) => {
     }
 });
 
-app.post('/api/update-device', async (req: Request, res: Response) => {
+app.post('/api/update-device', verifyApiAuth, async (req: Request, res: Response) => {
     const { token, device_id, device_name, device_type } = req.body;
 
     if (!token || !device_id) {
         return res.status(400).json({ error: 'Token and Device ID are required' });
     }
+
+    // Validate token format
+    if (!isValidTokenFormat(token)) {
+        return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    // Validate device_id format
+    if (!isValidDeviceId(device_id)) {
+        return res.status(400).json({ error: 'Invalid device ID format' });
+    }
+
+    // Sanitize optional fields
+    const sanitizedDeviceName = sanitizeString(device_name, 100);
+    const sanitizedDeviceType = sanitizeString(device_type, 50);
 
     let client;
     try {
@@ -102,7 +209,7 @@ app.post('/api/update-device', async (req: Request, res: Response) => {
                 SET device_id = $1, device_name = $2, device_type = $3
                 WHERE token_number = $4
             `;
-            await client.query(updateQuery, [device_id, device_name, device_type, token]);
+            await client.query(updateQuery, [device_id, sanitizedDeviceName, sanitizedDeviceType, token]);
 
             return res.json({
                 success: true,
