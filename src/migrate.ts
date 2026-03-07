@@ -15,7 +15,10 @@ const createTableQuery = `
     CREATE TABLE IF NOT EXISTS ukasir_token (
         token_number VARCHAR(255) PRIMARY KEY,
         register_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        status_active BOOLEAN DEFAULT TRUE
+        status_active BOOLEAN DEFAULT TRUE,
+        device_id VARCHAR(255),
+        device_name VARCHAR(255),
+        device_type VARCHAR(255)
     );
 `;
 
