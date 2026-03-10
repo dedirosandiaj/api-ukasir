@@ -343,7 +343,7 @@ app.post('/api/register-trial', verifyApiAuth, async (req: Request, res: Respons
             console.log('RESEND_API_KEY exists:', !!process.env.RESEND_API_KEY);
             
             const emailResult = await resend.emails.send({
-                from: 'Ukasir <onboarding@resend.dev>',
+                from: 'Ukasir <noreply@ukasir.id>',
                 to: sanitizedEmail,
                 subject: 'Your Ukasir Trial Token',
                 html: `
