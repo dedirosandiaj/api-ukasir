@@ -5,8 +5,12 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import { Resend } from 'resend';
 
 dotenv.config();
+
+// Initialize Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // API Authentication Config
 const API_KEY = process.env.API_KEY;
@@ -233,6 +237,149 @@ app.post('/api/update-device', verifyApiAuth, async (req: Request, res: Response
 
     } catch (error: any) {
         console.error('Database error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// Generate unique token
+const generateToken = (): string => {
+    const segments = [];
+    for (let i = 0; i < 4; i++) {
+        segments.push(Math.floor(1000 + Math.random() * 9000).toString());
+    }
+    return segments.join('-');
+};
+
+// API Registrasi Trial User
+app.post('/api/register-trial', verifyApiAuth, async (req: Request, res: Response) => {
+    const { name, email, phone, device_id, device_name, device_type } = req.body;
+
+    // Validasi input
+    if (!name || !email || !phone) {
+        return res.status(400).json({ error: 'Name, email, and phone are required' });
+    }
+
+    // Validasi email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    // Sanitasi input
+    const sanitizedName = sanitizeString(name, 100);
+    const sanitizedEmail = sanitizeString(email, 100)?.toLowerCase();
+    const sanitizedPhone = sanitizeString(phone, 20);
+    const sanitizedDeviceId = sanitizeString(device_id, 100);
+    const sanitizedDeviceName = sanitizeString(device_name, 100);
+    const sanitizedDeviceType = sanitizeString(device_type, 50);
+
+    if (!sanitizedName || !sanitizedEmail || !sanitizedPhone) {
+        return res.status(400).json({ error: 'Invalid input data' });
+    }
+
+    let client;
+    try {
+        client = await pool.connect();
+
+        // Cek apakah device sudah pernah daftar (jika ketiga device field diisi)
+        if (sanitizedDeviceId && sanitizedDeviceName && sanitizedDeviceType) {
+            const checkDeviceQuery = `
+                SELECT token_number FROM ukasir_token 
+                WHERE device_id = $1 AND device_name = $2 AND device_type = $3
+                LIMIT 1
+            `;
+            const deviceResult = await client.query(checkDeviceQuery, [
+                sanitizedDeviceId, 
+                sanitizedDeviceName, 
+                sanitizedDeviceType
+            ]);
+
+            if (deviceResult.rows.length > 0) {
+                return res.status(409).json({
+                    error: 'Device already registered',
+                    message: 'This device has already been used for trial registration'
+                });
+            }
+        }
+
+        // Generate token dan order_id
+        const token = generateToken();
+        const orderId = `TRIAL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        // Insert ke payments table
+        const paymentQuery = `
+            INSERT INTO payments (order_id, name, email, phone, amount, status, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+            RETURNING id
+        `;
+        await client.query(paymentQuery, [orderId, sanitizedName, sanitizedEmail, sanitizedPhone, 0, 'trial']);
+
+        // Insert ke ukasir_token table (dengan device info jika ada)
+        const tokenQuery = `
+            INSERT INTO ukasir_token (token_number, register_date, status_active, order_id, name, email, phone, device_id, device_name, device_type)
+            VALUES ($1, NOW(), true, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING token_number
+        `;
+        await client.query(tokenQuery, [
+            token, 
+            orderId, 
+            sanitizedName, 
+            sanitizedEmail, 
+            sanitizedPhone,
+            sanitizedDeviceId,
+            sanitizedDeviceName,
+            sanitizedDeviceType
+        ]);
+
+        // Send token via email using Resend
+        try {
+            await resend.emails.send({
+                from: 'Ukasir <noreply@ukasir.id>',
+                to: sanitizedEmail,
+                subject: 'Your Ukasir Trial Token',
+                html: `
+                    <h2>Welcome to Ukasir Trial!</h2>
+                    <p>Hi ${sanitizedName},</p>
+                    <p>Thank you for registering. Your trial token is:</p>
+                    <h3 style="background: #f0f0f0; padding: 10px; border-radius: 5px; font-family: monospace;">${token}</h3>
+                    <p>Use this token to activate your Ukasir application.</p>
+                    <p>Order ID: ${orderId}</p>
+                    <br>
+                    <p>Best regards,<br>Ukasir Team</p>
+                `
+            });
+        } catch (emailError) {
+            console.error('Failed to send email:', emailError);
+            // Continue even if email fails - token already saved to DB
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: 'Trial registration successful. Token sent to email.',
+            data: {
+                token: token,
+                order_id: orderId,
+                name: sanitizedName,
+                email: sanitizedEmail,
+                phone: sanitizedPhone
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Registration error:', error);
+        
+        // Handle duplicate email/phone
+        if (error.code === '23505') {
+            return res.status(409).json({
+                error: 'Email or phone already registered'
+            });
+        }
+        
         return res.status(500).json({
             error: 'Internal Server Error',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
