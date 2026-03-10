@@ -1,6 +1,30 @@
+# Dependencies
 node_modules
+
+# Environment variables (contains secrets)
 .env
+
+# Build output
 dist
+
+# OS files
 .DS_Store
 
+# Prisma generated files
 /generated/prisma
+
+# Documentation with credentials
+API_REGISTRATION_SPEC.md
+generate-signature.js
+postman_collection.json
+
+# Logs
+*.log
+logs
+
+# IDE
+.vscode
+.idea
+
+# Testing
+coverage
