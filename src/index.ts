@@ -63,6 +63,7 @@ const verifyApiAuth = (req: Request, res: Response, next: NextFunction): void =>
 };
 
 const app = express();
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3000;
 
 // Security middleware
@@ -338,8 +339,11 @@ app.post('/api/register-trial', verifyApiAuth, async (req: Request, res: Respons
 
         // Send token via email using Resend
         try {
-            await resend.emails.send({
-                from: 'Ukasir <noreply@ukasir.id>',
+            console.log('Attempting to send email to:', sanitizedEmail);
+            console.log('RESEND_API_KEY exists:', !!process.env.RESEND_API_KEY);
+            
+            const emailResult = await resend.emails.send({
+                from: 'Ukasir <onboarding@resend.dev>',
                 to: sanitizedEmail,
                 subject: 'Your Ukasir Trial Token',
                 html: `
@@ -353,8 +357,11 @@ app.post('/api/register-trial', verifyApiAuth, async (req: Request, res: Respons
                     <p>Best regards,<br>Ukasir Team</p>
                 `
             });
-        } catch (emailError) {
+            
+            console.log('Email sent successfully:', emailResult);
+        } catch (emailError: any) {
             console.error('Failed to send email:', emailError);
+            console.error('Error details:', emailError.message);
             // Continue even if email fails - token already saved to DB
         }
 
