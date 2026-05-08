@@ -499,6 +499,177 @@ router.get('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
     }
 });
 
+// Update Merchant (Protected)
+router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Response) => {
+    const { token } = req.params;
+    const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, status } = req.body;
+    let client;
+    try {
+        client = await pool.connect();
+
+        // Check if merchant exists
+        const checkQuery = 'SELECT * FROM merchants WHERE token_number = $1 LIMIT 1';
+        const checkResult = await client.query(checkQuery, [token]);
+
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Merchant not found' });
+        }
+
+        const existingMerchant = checkResult.rows[0];
+
+        // Validate email format if email is being updated
+        if (email) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ error: 'Invalid email format' });
+            }
+        }
+
+        // Sanitize inputs
+        const sanitizedName = sanitizeString(name, 100) || existingMerchant.name;
+        const sanitizedMerchantName = sanitizeString(merchant_name, 255) || existingMerchant.merchant_name;
+        const sanitizedEmail = (email ? sanitizeString(email, 100)?.toLowerCase() : existingMerchant.email);
+        const sanitizedPhone = sanitizeString(phone, 20) || existingMerchant.phone;
+        const sanitizedAddress = address !== undefined ? (sanitizeString(address, 500) || null) : existingMerchant.address;
+        const sanitizedCity = city !== undefined ? (sanitizeString(city, 100) || null) : existingMerchant.city;
+        const sanitizedSubdistrict = subdistrict !== undefined ? (sanitizeString(subdistrict, 100) || null) : existingMerchant.subdistrict;
+        const sanitizedRegency = regency !== undefined ? (sanitizeString(regency, 100) || null) : existingMerchant.regency;
+        const sanitizedProvince = province !== undefined ? (sanitizeString(province, 100) || null) : existingMerchant.province;
+        const sanitizedPostalCode = postal_code !== undefined ? (sanitizeString(postal_code, 10) || null) : existingMerchant.postal_code;
+        const sanitizedPackage = pkg || existingMerchant.package;
+        const sanitizedStatus = status || existingMerchant.status;
+
+        if (!sanitizedName || !sanitizedEmail || !sanitizedPhone) {
+            return res.status(400).json({ error: 'Invalid input data' });
+        }
+
+        // Check for duplicate email/phone (excluding current merchant)
+        const duplicateQuery = `
+            SELECT email, phone FROM merchants 
+            WHERE (email = $1 OR phone = $2) AND token_number != $3
+            LIMIT 1
+        `;
+        const duplicateResult = await client.query(duplicateQuery, [sanitizedEmail, sanitizedPhone, token]);
+
+        if (duplicateResult.rows.length > 0) {
+            const existingEmail = duplicateResult.rows[0].email === sanitizedEmail;
+            const existingPhone = duplicateResult.rows[0].phone === sanitizedPhone;
+            
+            let errorMessage = 'Update failed. ';
+            if (existingEmail && existingPhone) {
+                errorMessage += 'Email and phone already registered by another merchant.';
+            } else if (existingEmail) {
+                errorMessage += 'Email already registered by another merchant.';
+            } else {
+                errorMessage += 'Phone already registered by another merchant.';
+            }
+            
+            return res.status(409).json({ error: errorMessage });
+        }
+
+        // Update merchant
+        const updateQuery = `
+            UPDATE merchants SET
+                name = $1,
+                merchant_name = $2,
+                email = $3,
+                phone = $4,
+                address = $5,
+                city = $6,
+                subdistrict = $7,
+                regency = $8,
+                province = $9,
+                postal_code = $10,
+                package = $11,
+                status = $12,
+                updated_at = NOW()
+            WHERE token_number = $13
+            RETURNING *
+        `;
+
+        const result = await client.query(updateQuery, [
+            sanitizedName,
+            sanitizedMerchantName,
+            sanitizedEmail,
+            sanitizedPhone,
+            sanitizedAddress,
+            sanitizedCity,
+            sanitizedSubdistrict,
+            sanitizedRegency,
+            sanitizedProvince,
+            sanitizedPostalCode,
+            sanitizedPackage,
+            sanitizedStatus,
+            token
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Merchant updated successfully',
+            data: result.rows[0]
+        });
+
+    } catch (error: any) {
+        console.error('Update merchant error:', error);
+        
+        if (error.code === '23505') {
+            return res.status(409).json({
+                error: 'Email or phone already registered by another merchant'
+            });
+        }
+        
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// Delete Merchant (Protected)
+router.delete('/merchants/:token', verifyApiAuth, async (req: Request, res: Response) => {
+    const { token } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+
+        // Check if merchant exists
+        const checkQuery = 'SELECT * FROM merchants WHERE token_number = $1 LIMIT 1';
+        const checkResult = await client.query(checkQuery, [token]);
+
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Merchant not found' });
+        }
+
+        const merchant = checkResult.rows[0];
+
+        // Delete merchant
+        const deleteQuery = 'DELETE FROM merchants WHERE token_number = $1 RETURNING *';
+        const result = await client.query(deleteQuery, [token]);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Merchant deleted successfully',
+            data: {
+                token_number: result.rows[0].token_number,
+                name: result.rows[0].name,
+                email: result.rows[0].email,
+                deleted_at: new Date().toISOString()
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Delete merchant error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 // Midtrans Webhook Handler
 router.post('/payment-notification', async (req: Request, res: Response) => {
     const notification = req.body;
