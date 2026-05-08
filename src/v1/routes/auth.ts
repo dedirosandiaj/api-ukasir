@@ -358,6 +358,147 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     }
 });
 
+// Get All Merchants List (Protected)
+router.get('/merchants', verifyApiAuth, async (req: Request, res: Response) => {
+    let client;
+    try {
+        client = await pool.connect();
+
+        // Get query parameters for pagination and filtering
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const status = req.query.status as string;
+        const search = req.query.search as string;
+
+        const offset = (page - 1) * limit;
+
+        // Build query conditions
+        let whereConditions: string[] = [];
+        let queryParams: any[] = [];
+        let paramIndex = 1;
+
+        if (status) {
+            whereConditions.push(`status = $${paramIndex}`);
+            queryParams.push(status);
+            paramIndex++;
+        }
+
+        if (search) {
+            whereConditions.push(`(name ILIKE $${paramIndex} OR email ILIKE $${paramIndex} OR phone ILIKE $${paramIndex} OR merchant_name ILIKE $${paramIndex})`);
+            queryParams.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+        // Get total count
+        const countQuery = `SELECT COUNT(*) FROM merchants ${whereClause}`;
+        const countResult = await client.query(countQuery, queryParams);
+        const total = parseInt(countResult.rows[0].count);
+
+        // Get merchants data
+        const dataQuery = `
+            SELECT 
+                token_number,
+                order_id,
+                name,
+                merchant_name,
+                email,
+                phone,
+                address,
+                city,
+                subdistrict,
+                regency,
+                province,
+                postal_code,
+                package,
+                amount,
+                status,
+                payment_method,
+                payment_status,
+                midtrans_order_id,
+                paid_at,
+                register_date,
+                status_active,
+                device_id,
+                device_name,
+                device_type,
+                referral_code,
+                created_at,
+                updated_at
+            FROM merchants 
+            ${whereClause}
+            ORDER BY created_at DESC
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+        
+        queryParams.push(limit, offset);
+        const dataResult = await client.query(dataQuery, queryParams);
+
+        const totalPages = Math.ceil(total / limit);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Merchants retrieved successfully',
+            data: dataResult.rows,
+            pagination: {
+                current_page: page,
+                per_page: limit,
+                total_items: total,
+                total_pages: totalPages,
+                has_next: page < totalPages,
+                has_prev: page > 1
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Get merchants error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// Get Merchant by Token Number (Protected)
+router.get('/merchants/:token', verifyApiAuth, async (req: Request, res: Response) => {
+    const { token } = req.params;
+    let client;
+    try {
+        client = await pool.connect();
+
+        const query = `
+            SELECT * FROM merchants 
+            WHERE token_number = $1
+            LIMIT 1
+        `;
+        const result = await client.query(query, [token]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                error: 'Merchant not found'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Merchant retrieved successfully',
+            data: result.rows[0]
+        });
+
+    } catch (error: any) {
+        console.error('Get merchant error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 // Midtrans Webhook Handler
 router.post('/payment-notification', async (req: Request, res: Response) => {
     const notification = req.body;
