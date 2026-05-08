@@ -237,6 +237,30 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     try {
         client = await pool.connect();
 
+        // Check if email or phone already registered
+        const checkQuery = `
+            SELECT email, phone FROM merchants 
+            WHERE email = $1 OR phone = $2
+            LIMIT 1
+        `;
+        const checkResult = await client.query(checkQuery, [sanitizedEmail, sanitizedPhone]);
+        
+        if (checkResult.rows.length > 0) {
+            const existingEmail = checkResult.rows[0].email === sanitizedEmail;
+            const existingPhone = checkResult.rows[0].phone === sanitizedPhone;
+            
+            let errorMessage = 'Registration failed. ';
+            if (existingEmail && existingPhone) {
+                errorMessage += 'Email and phone already registered.';
+            } else if (existingEmail) {
+                errorMessage += 'Email already registered.';
+            } else {
+                errorMessage += 'Phone already registered.';
+            }
+            
+            return res.status(409).json({ error: errorMessage });
+        }
+
         const token = generateToken();
         const orderId = `${packageName === 'trial' ? 'TRIAL' : 'PREMIUM'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
