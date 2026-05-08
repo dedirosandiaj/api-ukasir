@@ -2,6 +2,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { Pool } from 'pg';
 import rateLimit from 'express-rate-limit';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const router = Router();
 
@@ -95,7 +98,7 @@ router.post('/validate-token', verifyApiAuth, validateTokenLimiter, async (req: 
     let client;
     try {
         client = await pool.connect();
-        const query = 'SELECT token_number, register_date, status_active FROM ukasir_token WHERE token_number = $1';
+        const query = 'SELECT token_number, register_date, status_active FROM merchants WHERE token_number = $1';
         const result = await client.query(query, [token]);
 
         if (result.rows.length > 0) {
@@ -143,7 +146,7 @@ router.post('/update-device', verifyApiAuth, async (req: Request, res: Response)
     try {
         client = await pool.connect();
 
-        const checkQuery = 'SELECT token_number, device_id FROM ukasir_token WHERE token_number = $1';
+        const checkQuery = 'SELECT token_number, device_id FROM merchants WHERE token_number = $1';
         const checkResult = await client.query(checkQuery, [token]);
 
         if (checkResult.rows.length === 0) {
@@ -154,7 +157,7 @@ router.post('/update-device', verifyApiAuth, async (req: Request, res: Response)
 
         if (!currentDevice) {
             const updateQuery = `
-                UPDATE ukasir_token 
+                UPDATE merchants 
                 SET device_id = $1, device_name = $2, device_type = $3
                 WHERE token_number = $4
             `;

@@ -12,7 +12,11 @@ const port = process.env.PORT || 3000;
 
 // Security middleware
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'x-api-key', 'x-timestamp', 'x-signature']
+}));
 app.use(express.json({ limit: '10kb' }));
 
 // Rate limiting - 100 requests per 15 minutes per IP
@@ -37,7 +41,7 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 // Mount v1 routes
-app.use(v1Routes);
+app.use('/v1', v1Routes);
 
 // Vercel requires exporting the app
 export default app;
