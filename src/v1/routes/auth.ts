@@ -201,8 +201,8 @@ const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
 router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Response) => {
     const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, amount } = req.body;
 
-    if (!name || !email || !phone) {
-        return res.status(400).json({ error: 'Name, email, and phone are required' });
+    if (!name || !merchant_name || !email || !phone || !address || !city || !subdistrict || !regency || !province || !postal_code) {
+        return res.status(400).json({ error: 'All fields are required: name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code' });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -221,7 +221,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     const sanitizedProvince = sanitizeString(province, 100);
     const sanitizedPostalCode = sanitizeString(postal_code, 10);
 
-    if (!sanitizedName || !sanitizedEmail || !sanitizedPhone) {
+    if (!sanitizedName || !sanitizedMerchantName || !sanitizedEmail || !sanitizedPhone || !sanitizedAddress || !sanitizedCity || !sanitizedSubdistrict || !sanitizedRegency || !sanitizedProvince || !sanitizedPostalCode) {
         return res.status(400).json({ error: 'Invalid input data' });
     }
 
