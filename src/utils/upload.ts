@@ -1,25 +1,25 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import AWS from 'aws-sdk';
+import dotenv from 'dotenv';
 
-// Ensure upload directory exists
-const uploadDir = path.join(process.cwd(), 'uploads', 'products');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
+dotenv.config();
 
-// Configure storage
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const ext = path.extname(file.originalname);
-        const name = path.basename(file.originalname, ext);
-        cb(null, `product-${uniqueSuffix}-${name}${ext}`);
-    }
+// MinIO S3 Configuration
+const s3 = new AWS.S3({
+    endpoint: process.env.S3_ENDPOINT || 'https://s3.ucentric.id',
+    accessKeyId: process.env.S3_ACCESS_KEY || 'oXIbZJQ9bJQHnvu0',
+    secretAccessKey: process.env.S3_SECRET_KEY || 'r204fGZT9SEqqNzAYOSCM0GriNPrjaTh',
+    s3ForcePathStyle: true,
+    signatureVersion: 'v4'
 });
+
+const S3_BUCKET = process.env.S3_BUCKET || 'products';
+const S3_BASE_URL = process.env.S3_BASE_URL || 'https://s3.ucentric.id';
+
+// Multer memory storage (for S3 upload)
+const storage = multer.memoryStorage();
 
 // File filter - only images
 const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
@@ -43,23 +43,43 @@ export const upload = multer({
     fileFilter: fileFilter
 });
 
-// Helper to delete file
-export const deleteFile = (filename: string): void => {
-    if (!filename) return;
-    
-    const filepath = path.join(process.cwd(), 'uploads', 'products', filename);
-    if (fs.existsSync(filepath)) {
-        fs.unlinkSync(filepath);
-    }
+// Upload file to S3
+export const uploadToS3 = async (file: Express.Multer.File): Promise<string> => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext);
+    const filename = `product-${uniqueSuffix}-${name}${ext}`;
+
+    const params = {
+        Bucket: S3_BUCKET,
+        Key: filename,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: 'public-read'
+    };
+
+    const result = await s3.upload(params).promise();
+    return result.Location;
 };
 
-// Helper to get file URL from filename
-export const getFileUrl = (filename: string): string => {
-    if (!filename) return '';
+// Delete file from S3
+export const deleteFromS3 = async (fileUrl: string): Promise<void> => {
+    if (!fileUrl) return;
     
-    // For production, this should be your CDN or server URL
-    const baseUrl = process.env.UPLOAD_BASE_URL || 'https://api.ukasir.id';
-    return `${baseUrl}/uploads/products/${filename}`;
+    // Extract filename from URL
+    const filename = getFilenameFromUrl(fileUrl);
+    if (!filename) return;
+
+    const params = {
+        Bucket: S3_BUCKET,
+        Key: filename
+    };
+
+    try {
+        await s3.deleteObject(params).promise();
+    } catch (error) {
+        console.error('Error deleting file from S3:', error);
+    }
 };
 
 // Helper to get filename from URL

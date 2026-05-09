@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
-import { upload, deleteFile, getFileUrl, getFilenameFromUrl } from '../../utils/upload';
+import { upload, uploadToS3, deleteFromS3, getFilenameFromUrl } from '../../utils/upload';
 
 dotenv.config();
 
@@ -84,69 +84,6 @@ const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
     next();
 };
 
-// Cleanup Unused Photos
-router.post('/products/cleanup-photos', verifyApiAuth, async (req: Request, res: Response) => {
-    let client;
-    try {
-        client = await pool.connect();
-        const fs = require('fs');
-        const path = require('path');
-
-        // Get all photo URLs from database
-        const photoQuery = 'SELECT photo_url FROM product WHERE photo_url IS NOT NULL';
-        const photoResult = await client.query(photoQuery);
-        const usedUrls = new Set(photoResult.rows.map((row: any) => row.photo_url));
-
-        // Scan uploads directory
-        const uploadDir = path.join(process.cwd(), 'uploads', 'products');
-        if (!fs.existsSync(uploadDir)) {
-            return res.status(200).json({
-                success: true,
-                message: 'No photos to cleanup',
-                data: { deleted: 0, space_freed: 0 }
-            });
-        }
-
-        const files = fs.readdirSync(uploadDir);
-        let deletedCount = 0;
-        let spaceFreed = 0;
-
-        for (const file of files) {
-            const fileUrl = getFileUrl(file);
-            
-            // Check if file URL is used in any product
-            if (!usedUrls.has(fileUrl)) {
-                const filePath = path.join(uploadDir, file);
-                const stats = fs.statSync(filePath);
-                
-                // Delete unused file
-                fs.unlinkSync(filePath);
-                deletedCount++;
-                spaceFreed += stats.size;
-            }
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: `Cleanup completed. Deleted ${deletedCount} unused photos.`,
-            data: {
-                deleted: deletedCount,
-                space_freed_bytes: spaceFreed,
-                space_freed_mb: (spaceFreed / (1024 * 1024)).toFixed(2)
-            }
-        });
-
-    } catch (error: any) {
-        console.error('Cleanup photos error:', error);
-        return res.status(500).json({
-            error: 'Failed to cleanup photos',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
-    } finally {
-        if (client) client.release();
-    }
-});
-
 // Upload Photo Endpoint (with HMAC auth + rate limit)
 router.post('/products/upload-photo', uploadLimiter, verifyApiAuth, upload.single('photo'), async (req: Request, res: Response) => {
     try {
@@ -157,18 +94,16 @@ router.post('/products/upload-photo', uploadLimiter, verifyApiAuth, upload.singl
         // Validate file size (5MB max)
         const maxSize = 5 * 1024 * 1024; // 5MB
         if (req.file.size > maxSize) {
-            // Delete oversized file
-            deleteFile(req.file.filename);
             return res.status(400).json({ error: 'File size exceeds 5MB limit' });
         }
 
-        const photoUrl = getFileUrl(req.file.filename);
+        // Upload to S3
+        const photoUrl = await uploadToS3(req.file);
 
         return res.status(200).json({
             success: true,
             message: 'Photo uploaded successfully',
             data: {
-                filename: req.file.filename,
                 url: photoUrl,
                 size: req.file.size,
                 mimetype: req.file.mimetype
@@ -176,10 +111,6 @@ router.post('/products/upload-photo', uploadLimiter, verifyApiAuth, upload.singl
         });
     } catch (error: any) {
         console.error('Upload photo error:', error);
-        
-        if (req.file) {
-            deleteFile(req.file.filename);
-        }
         
         return res.status(500).json({
             error: 'Failed to upload photo',
@@ -430,6 +361,25 @@ router.put('/products/:slug', verifyApiAuth, async (req: Request, res: Response)
             }
         }
 
+        // Handle photo_url update
+        let photoUrl = existingProduct.photo_url;
+        if (photo_url !== undefined) {
+            // If new photo provided
+            if (photo_url) {
+                // Delete old photo from S3 if exists
+                if (existingProduct.photo_url) {
+                    await deleteFromS3(existingProduct.photo_url);
+                }
+                photoUrl = sanitizeString(photo_url, 500);
+            } else {
+                // If explicitly set to null/empty, delete old photo
+                if (existingProduct.photo_url) {
+                    await deleteFromS3(existingProduct.photo_url);
+                }
+                photoUrl = null;
+            }
+        }
+
         // Update product
         const updateQuery = `
             UPDATE product SET
@@ -495,6 +445,13 @@ router.delete('/products/:slug', verifyApiAuth, async (req: Request, res: Respon
 
         if (checkResult.rows.length === 0) {
             return res.status(404).json({ error: 'Product not found' });
+        }
+
+        const productToDelete = checkResult.rows[0];
+
+        // Delete photo from S3 if exists
+        if (productToDelete.photo_url) {
+            await deleteFromS3(productToDelete.photo_url);
         }
 
         // Delete product
