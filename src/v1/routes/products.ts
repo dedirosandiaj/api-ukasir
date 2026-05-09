@@ -289,10 +289,10 @@ router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
             });
         }
 
-        // Insert product
+        // Insert product with explicit UUID generation
         const insertQuery = `
-            INSERT INTO product (name, slug, price, photo_url, description, status)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO product (id, name, slug, price, photo_url, description, status)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
             RETURNING *
         `;
 
