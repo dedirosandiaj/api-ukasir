@@ -33,6 +33,15 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// Stricter rate limit for uploads - 20 uploads per 15 minutes
+const uploadLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { error: 'Too many upload requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
 // Trust proxy for Coolify/Vercel
 app.set('trust proxy', 1);
 

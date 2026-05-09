@@ -2,11 +2,21 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 import { upload, deleteFile, getFileUrl, getFilenameFromUrl } from '../../utils/upload';
 
 dotenv.config();
 
 const router = Router();
+
+// Strict rate limit for upload endpoint
+const uploadLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20, // 20 uploads per 15 min
+    message: { error: 'Too many upload requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false
+});
 
 // Database connection
 const pool = new Pool({
@@ -74,29 +84,82 @@ const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
     next();
 };
 
-// Simple API Key Auth (for file uploads)
-const verifyApiKey = (req: Request, res: Response, next: Function): void => {
-    const API_KEY = process.env.API_KEY;
-    const apiKey = req.headers['x-api-key'] as string;
+// Cleanup Unused Photos
+router.post('/products/cleanup-photos', verifyApiAuth, async (req: Request, res: Response) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const fs = require('fs');
+        const path = require('path');
 
-    if (!apiKey) {
-        res.status(401).json({ error: 'Missing API key' });
-        return;
+        // Get all photo URLs from database
+        const photoQuery = 'SELECT photo_url FROM product WHERE photo_url IS NOT NULL';
+        const photoResult = await client.query(photoQuery);
+        const usedUrls = new Set(photoResult.rows.map((row: any) => row.photo_url));
+
+        // Scan uploads directory
+        const uploadDir = path.join(process.cwd(), 'uploads', 'products');
+        if (!fs.existsSync(uploadDir)) {
+            return res.status(200).json({
+                success: true,
+                message: 'No photos to cleanup',
+                data: { deleted: 0, space_freed: 0 }
+            });
+        }
+
+        const files = fs.readdirSync(uploadDir);
+        let deletedCount = 0;
+        let spaceFreed = 0;
+
+        for (const file of files) {
+            const fileUrl = getFileUrl(file);
+            
+            // Check if file URL is used in any product
+            if (!usedUrls.has(fileUrl)) {
+                const filePath = path.join(uploadDir, file);
+                const stats = fs.statSync(filePath);
+                
+                // Delete unused file
+                fs.unlinkSync(filePath);
+                deletedCount++;
+                spaceFreed += stats.size;
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Cleanup completed. Deleted ${deletedCount} unused photos.`,
+            data: {
+                deleted: deletedCount,
+                space_freed_bytes: spaceFreed,
+                space_freed_mb: (spaceFreed / (1024 * 1024)).toFixed(2)
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Cleanup photos error:', error);
+        return res.status(500).json({
+            error: 'Failed to cleanup photos',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
     }
+});
 
-    if (apiKey !== API_KEY) {
-        res.status(401).json({ error: 'Invalid API key' });
-        return;
-    }
-
-    next();
-};
-
-// Upload Photo Endpoint
-router.post('/products/upload-photo', verifyApiKey, upload.single('photo'), async (req: Request, res: Response) => {
+// Upload Photo Endpoint (with HMAC auth + rate limit)
+router.post('/products/upload-photo', uploadLimiter, verifyApiAuth, upload.single('photo'), async (req: Request, res: Response) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        // Validate file size (5MB max)
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (req.file.size > maxSize) {
+            // Delete oversized file
+            deleteFile(req.file.filename);
+            return res.status(400).json({ error: 'File size exceeds 5MB limit' });
         }
 
         const photoUrl = getFileUrl(req.file.filename);
