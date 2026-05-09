@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import { upload, deleteFile, getFileUrl, getFilenameFromUrl } from '../../utils/upload';
 
 dotenv.config();
 
@@ -197,8 +198,8 @@ router.get('/products/:slug', verifyApiAuth, async (req: Request, res: Response)
 });
 
 // Create Product
-router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
-    const { name, slug, price, photo_url, description, status } = req.body;
+router.post('/products', verifyApiAuth, upload.single('photo'), async (req: Request, res: Response) => {
+    const { name, slug, price, description, status } = req.body;
     let client;
     try {
         client = await pool.connect();
@@ -213,7 +214,6 @@ router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
         // Sanitize inputs
         const sanitizedName = sanitizeString(name, 255);
         const sanitizedSlug = slug ? sanitizeString(slug, 255) : generateSlug(name);
-        const sanitizedPhotoUrl = photo_url ? sanitizeString(photo_url, 500) : null;
         const sanitizedDescription = description ? sanitizeString(description, 5000) : null;
         const sanitizedStatus = status || 'active';
 
@@ -225,6 +225,12 @@ router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
         const productPrice = parseFloat(price);
         if (isNaN(productPrice) || productPrice < 0) {
             return res.status(400).json({ error: 'Invalid price. Must be a positive number' });
+        }
+
+        // Handle photo upload
+        let photoUrl = null;
+        if (req.file) {
+            photoUrl = getFileUrl(req.file.filename);
         }
 
         // Check if slug already exists
@@ -248,7 +254,7 @@ router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
             sanitizedName,
             sanitizedSlug,
             productPrice,
-            sanitizedPhotoUrl,
+            photoUrl,
             sanitizedDescription,
             sanitizedStatus
         ]);
@@ -261,6 +267,11 @@ router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
 
     } catch (error: any) {
         console.error('Create product error:', error);
+        
+        // Delete uploaded file if error occurs
+        if (req.file) {
+            deleteFile(req.file.filename);
+        }
         
         if (error.code === '23505') {
             return res.status(409).json({
@@ -278,9 +289,9 @@ router.post('/products', verifyApiAuth, async (req: Request, res: Response) => {
 });
 
 // Update Product
-router.put('/products/:slug', verifyApiAuth, async (req: Request, res: Response) => {
+router.put('/products/:slug', verifyApiAuth, upload.single('photo'), async (req: Request, res: Response) => {
     const { slug } = req.params;
-    const { name, price, photo_url, description, status } = req.body;
+    const { name, price, description, status } = req.body;
     let client;
     try {
         client = await pool.connect();
@@ -298,7 +309,6 @@ router.put('/products/:slug', verifyApiAuth, async (req: Request, res: Response)
         // Sanitize inputs (use existing values if not provided)
         const sanitizedName = name ? sanitizeString(name, 255) : existingProduct.name;
         const sanitizedSlug = name ? generateSlug(name) : slug;
-        const sanitizedPhotoUrl = photo_url !== undefined ? (photo_url ? sanitizeString(photo_url, 500) : null) : existingProduct.photo_url;
         const sanitizedDescription = description !== undefined ? (description ? sanitizeString(description, 5000) : null) : existingProduct.description;
         const sanitizedStatus = status || existingProduct.status;
 
@@ -313,6 +323,18 @@ router.put('/products/:slug', verifyApiAuth, async (req: Request, res: Response)
             if (isNaN(productPrice) || productPrice < 0) {
                 return res.status(400).json({ error: 'Invalid price. Must be a positive number' });
             }
+        }
+
+        // Handle photo upload
+        let photoUrl = existingProduct.photo_url;
+        if (req.file) {
+            // Delete old photo if exists
+            if (existingProduct.photo_url) {
+                const oldFilename = getFilenameFromUrl(existingProduct.photo_url);
+                deleteFile(oldFilename);
+            }
+            // Set new photo URL
+            photoUrl = getFileUrl(req.file.filename);
         }
 
         // Update product
@@ -333,7 +355,7 @@ router.put('/products/:slug', verifyApiAuth, async (req: Request, res: Response)
             sanitizedName,
             sanitizedSlug,
             productPrice,
-            sanitizedPhotoUrl,
+            photoUrl,
             sanitizedDescription,
             sanitizedStatus,
             slug
@@ -351,6 +373,11 @@ router.put('/products/:slug', verifyApiAuth, async (req: Request, res: Response)
 
     } catch (error: any) {
         console.error('Update product error:', error);
+        
+        // Delete uploaded file if error occurs
+        if (req.file) {
+            deleteFile(req.file.filename);
+        }
         
         if (error.code === '23505') {
             return res.status(409).json({

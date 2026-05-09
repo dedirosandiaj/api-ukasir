@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import path from 'path';
 import v1Routes from './v1';
 
 dotenv.config();
@@ -18,6 +19,9 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'x-api-key', 'x-timestamp', 'x-signature']
 }));
 app.use(express.json({ limit: '10kb' }));
+
+// Serve static files (uploads)
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Rate limiting - 100 requests per 15 minutes per IP
 const limiter = rateLimit({
