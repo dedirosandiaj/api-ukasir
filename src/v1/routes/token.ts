@@ -98,13 +98,60 @@ router.post('/validate-token', verifyApiAuth, validateTokenLimiter, async (req: 
     let client;
     try {
         client = await pool.connect();
-        const query = 'SELECT token_number, register_date, status_active FROM merchants WHERE token_number = $1';
+        const query = 'SELECT token_number, register_date, status_active, package FROM merchants WHERE token_number = $1';
         const result = await client.query(query, [token]);
 
         if (result.rows.length > 0) {
+            const merchant = result.rows[0];
+            
+            // Check if trial has expired (7 days)
+            if (merchant.package === 'trial' && merchant.status_active) {
+                const registerDate = new Date(merchant.register_date);
+                const now = new Date();
+                const daysSinceRegister = (now.getTime() - registerDate.getTime()) / (1000 * 60 * 60 * 24);
+                
+                if (daysSinceRegister > 7) {
+                    // Trial expired - deactivate token
+                    const updateQuery = 'UPDATE merchants SET status_active = false WHERE token_number = $1';
+                    await client.query(updateQuery, [token]);
+                    
+                    return res.status(403).json({
+                        valid: false,
+                        message: 'Trial period has expired. Trial is valid for 7 days only.',
+                        data: {
+                            token_number: merchant.token_number,
+                            register_date: merchant.register_date,
+                            trial_expired: true,
+                            days_used: Math.floor(daysSinceRegister),
+                            max_days: 7
+                        }
+                    });
+                }
+            }
+            
+            // Check if token is active
+            if (!merchant.status_active) {
+                return res.status(404).json({
+                    valid: false,
+                    message: 'Token not found or inactive',
+                    data: {
+                        token_number: merchant.token_number,
+                        status_active: false
+                    }
+                });
+            }
+            
             return res.json({
                 valid: true,
-                data: result.rows[0]
+                data: {
+                    token_number: merchant.token_number,
+                    register_date: merchant.register_date,
+                    status_active: merchant.status_active,
+                    package: merchant.package,
+                    ...(merchant.package === 'trial' ? {
+                        trial_days_remaining: Math.max(0, 7 - Math.floor((new Date().getTime() - new Date(merchant.register_date).getTime()) / (1000 * 60 * 60 * 24)))
+                    } : {})
+                }
             });
         } else {
             return res.status(404).json({
