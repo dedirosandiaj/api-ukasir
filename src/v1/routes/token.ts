@@ -239,4 +239,50 @@ router.post('/update-device', verifyApiAuth, async (req: Request, res: Response)
     }
 });
 
+// Unlink Device
+router.post('/unlink-device', verifyApiAuth, async (req: Request, res: Response) => {
+    const { token } = req.body;
+
+    if (!token) {
+        return res.status(400).json({ error: 'Token is required' });
+    }
+
+    if (!isValidTokenFormat(token)) {
+        return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    let client;
+    try {
+        client = await pool.connect();
+
+        const checkQuery = 'SELECT token_number FROM merchants WHERE token_number = $1';
+        const checkResult = await client.query(checkQuery, [token]);
+
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Token not found' });
+        }
+
+        const updateQuery = `
+            UPDATE merchants 
+            SET device_id = NULL, device_name = NULL, device_type = NULL
+            WHERE token_number = $1
+        `;
+        await client.query(updateQuery, [token]);
+
+        return res.json({
+            success: true,
+            message: 'Device unlinked successfully'
+        });
+
+    } catch (error: any) {
+        console.error('Database error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 export default router;
