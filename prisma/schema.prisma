@@ -53,3 +53,33 @@ model product {
   @@index([slug])
   @@index([status])
 }
+
+model notifications {
+  id           String    @id @default(uuid()) @db.Uuid
+  title        String    @db.VarChar(255)
+  body         String    @db.Text
+  type         String    @default("info") @db.VarChar(50)
+  target_type  String    @default("broadcast") @db.VarChar(50)
+  token_number String?   @db.VarChar(255)
+  status       String    @default("scheduled") @db.VarChar(50)
+  scheduled_at DateTime  @default(now()) @db.Timestamptz(6)
+  created_at   DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([type])
+  @@index([target_type])
+  @@index([token_number])
+  @@index([status])
+  @@index([scheduled_at])
+}
+
+model notification_reads {
+  id              String   @id @default(uuid()) @db.Uuid
+  notification_id String   @db.Uuid
+  token_number    String   @db.VarChar(255)
+  read_at         DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([notification_id, token_number])
+  @@index([token_number])
+}
+
