@@ -502,7 +502,7 @@ router.get('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
 // Update Merchant (Protected)
 router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Response) => {
     const { token } = req.params;
-    const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, status } = req.body;
+    const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, status, status_active, register_date } = req.body;
     let client;
     try {
         client = await pool.connect();
@@ -538,6 +538,8 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
         const sanitizedPostalCode = postal_code !== undefined ? (sanitizeString(postal_code, 10) || null) : existingMerchant.postal_code;
         const sanitizedPackage = pkg || existingMerchant.package;
         const sanitizedStatus = status || existingMerchant.status;
+        const sanitizedStatusActive = status_active !== undefined ? Boolean(status_active) : existingMerchant.status_active;
+        const sanitizedRegisterDate = register_date !== undefined ? new Date(register_date) : existingMerchant.register_date;
 
         if (!sanitizedName || !sanitizedEmail || !sanitizedPhone) {
             return res.status(400).json({ error: 'Invalid input data' });
@@ -582,8 +584,10 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
                 postal_code = $10,
                 package = $11,
                 status = $12,
+                status_active = $13,
+                register_date = $14,
                 updated_at = NOW()
-            WHERE token_number = $13
+            WHERE token_number = $15
             RETURNING *
         `;
 
@@ -600,6 +604,8 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
             sanitizedPostalCode,
             sanitizedPackage,
             sanitizedStatus,
+            sanitizedStatusActive,
+            sanitizedRegisterDate,
             token
         ]);
 
