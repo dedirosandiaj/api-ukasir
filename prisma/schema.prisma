@@ -61,7 +61,7 @@ model notifications {
   type         String    @default("info") @db.VarChar(50)
   target_type  String    @default("broadcast") @db.VarChar(50)
   token_number String?   @db.VarChar(255)
-  status       String    @default("scheduled") @db.VarChar(50)
+  status       String    @default("scheduled") @db.VarChar(50) // scheduled, draft, inactive
   scheduled_at DateTime  @default(now()) @db.Timestamptz(6)
   created_at   DateTime  @default(now()) @db.Timestamptz(6)
   updated_at   DateTime  @default(now()) @db.Timestamptz(6)

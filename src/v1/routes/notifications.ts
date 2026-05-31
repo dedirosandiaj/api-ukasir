@@ -447,7 +447,7 @@ router.get('/merchant/notifications', verifyApiAuth, clientNotificationLimiter, 
             LEFT JOIN notification_reads r 
                 ON n.id = r.notification_id AND r.token_number = $1
             WHERE 
-                n.status = 'scheduled' 
+                n.status IN ('scheduled', 'sent')
                 AND n.scheduled_at <= NOW()
                 AND (
                     n.target_type = 'broadcast' 
@@ -508,7 +508,7 @@ router.post('/merchant/notifications/:id/read', verifyApiAuth, clientNotificatio
         const checkNotif = `
             SELECT id FROM notifications 
             WHERE id = $1::uuid 
-              AND status = 'scheduled' 
+              AND status IN ('scheduled', 'sent')
               AND scheduled_at <= NOW()
               AND (target_type = 'broadcast' OR token_number = $2)
             LIMIT 1
