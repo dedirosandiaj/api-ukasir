@@ -3,7 +3,6 @@ import authRoutes from './routes/auth';
 import tokenRoutes from './routes/token';
 import productRoutes from './routes/products';
 import notificationRoutes from './routes/notifications';
-import configsRoutes from './routes/configs';
 
 const router = Router();
 
@@ -12,6 +11,5 @@ router.use(authRoutes);
 router.use(tokenRoutes);
 router.use(productRoutes);
 router.use(notificationRoutes);
-router.use(configsRoutes);
 
 export default router;
