@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
 import v1Routes from './v1';
+import { getConfig } from './utils/config';
 
 dotenv.config();
 
@@ -14,7 +15,25 @@ const port = process.env.PORT || 3000;
 // Security middleware
 app.use(helmet());
 app.use(cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : '*',
+    origin: (origin, callback) => {
+        getConfig('CORS_ORIGIN', '')
+            .then((corsOriginVal) => {
+                if (!corsOriginVal || corsOriginVal === '*' || corsOriginVal.trim() === '') {
+                    callback(null, true);
+                    return;
+                }
+                const allowedOrigins = corsOriginVal.split(',').map(o => o.trim());
+                if (!origin || allowedOrigins.includes(origin)) {
+                    callback(null, true);
+                } else {
+                    callback(new Error('Not allowed by CORS'));
+                }
+            })
+            .catch(() => {
+                // Fallback to allow if DB fails
+                callback(null, true);
+            });
+    },
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type', 'x-api-key', 'x-timestamp', 'x-signature']
 }));

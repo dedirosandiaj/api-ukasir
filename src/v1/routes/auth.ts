@@ -3,38 +3,50 @@ import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 import nodemailer from 'nodemailer';
+import { getConfig } from '../../utils/config';
 
 // @ts-ignore - midtrans-client doesn't have types
 import midtransClient from 'midtrans-client';
 
 dotenv.config();
 
-// Initialize Midtrans Snap API
-const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
-const snap = new midtransClient.Snap({
-    isProduction: isProduction,
-    serverKey: process.env.MIDTRANS_SERVER_KEY,
-    clientKey: process.env.MIDTRANS_CLIENT_KEY
-});
+// Dynamic Midtrans Snap API Constructor
+const getMidtransSnap = async () => {
+    const serverKey = await getConfig('MIDTRANS_SERVER_KEY');
+    const clientKey = await getConfig('MIDTRANS_CLIENT_KEY');
+    const isProduction = await getConfig('MIDTRANS_IS_PRODUCTION') === 'true';
+    return new midtransClient.Snap({
+        isProduction,
+        serverKey,
+        clientKey
+    });
+};
 
-// Initialize Nodemailer
-const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT || '465'),
-    secure: true, // true for 465, false for other ports
-    auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD
-    }
-});
+// Dynamic Nodemailer Constructor
+const getSmtpTransporter = async () => {
+    const host = await getConfig('SMTP_HOST');
+    const port = parseInt(await getConfig('SMTP_PORT', '465'));
+    const user = await getConfig('SMTP_USER');
+    const pass = await getConfig('SMTP_PASSWORD');
+    return nodemailer.createTransport({
+        host,
+        port,
+        secure: true, // true for 465
+        auth: {
+            user,
+            pass
+        }
+    });
+};
 
 const router = Router();
 
 // Helper function to send payment email
 const sendPaymentEmail = async (email: string, name: string, merchantName: string, paymentUrl: string, amount: number, packageName: string) => {
     try {
+        const smtpFrom = await getConfig('SMTP_FROM', 'Ukasir <noreply@ukasir.id>');
         const mailOptions = {
-            from: process.env.SMTP_FROM,
+            from: smtpFrom,
             to: email,
             subject: 'Complete Your Ukasir Payment',
             html: `
@@ -70,6 +82,7 @@ const sendPaymentEmail = async (email: string, name: string, merchantName: strin
             `
         };
 
+        const transporter = await getSmtpTransporter();
         await transporter.sendMail(mailOptions);
         console.log('Payment email sent to:', email);
     } catch (error) {
@@ -80,8 +93,9 @@ const sendPaymentEmail = async (email: string, name: string, merchantName: strin
 // Helper function to send payment success email with token
 const sendPaymentSuccessEmail = async (email: string, name: string, merchantName: string, token: string, packageName: string) => {
     try {
+        const smtpFrom = await getConfig('SMTP_FROM', 'Ukasir <noreply@ukasir.id>');
         const mailOptions = {
-            from: process.env.SMTP_FROM,
+            from: smtpFrom,
             to: email,
             subject: 'Payment Successful - Your Ukasir Token',
             html: `
@@ -119,6 +133,7 @@ const sendPaymentSuccessEmail = async (email: string, name: string, merchantName
             `
         };
 
+        const transporter = await getSmtpTransporter();
         await transporter.sendMail(mailOptions);
         console.log('Payment success email sent to:', email);
     } catch (error) {
@@ -148,11 +163,7 @@ const generateToken = (): string => {
 };
 
 const pool = new Pool({
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '5432'),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
+    connectionString: process.env.DATABASE_URL,
     ssl: false,
     connectionTimeoutMillis: 5000
 });
@@ -310,6 +321,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             }]
         };
 
+        const snap = await getMidtransSnap();
         const transaction = await snap.createTransaction(transactionDetails);
         const paymentUrl = transaction.redirect_url;
 
@@ -689,9 +701,10 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
     const midtransSignature = req.headers['x-midtrans-signature'] as string;
     
     if (midtransSignature) {
+        const serverKey = await getConfig('MIDTRANS_SERVER_KEY');
         const expectedSignature = crypto
             .createHash('sha512')
-            .update(`${notification.order_id}${notification.status_code}${notification.gross_amount}${process.env.MIDTRANS_SERVER_KEY}`)
+            .update(`${notification.order_id}${notification.status_code}${notification.gross_amount}${serverKey}`)
             .digest('hex');
 
         if (midtransSignature !== expectedSignature) {
