@@ -4,10 +4,17 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
+import { Pool } from 'pg';
 import v1Routes from './v1';
 import { getConfig } from './utils/config';
 
 dotenv.config();
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: false,
+    connectionTimeoutMillis: 5000
+});
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -70,6 +77,35 @@ app.get('/', (req: Request, res: Response) => {
         message: 'Ukasir API is running',
         version: '1.0.0'
     });
+});
+
+// Comprehensive health check
+app.get('/health', async (req: Request, res: Response) => {
+    let dbConnected = false;
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('SELECT 1');
+        dbConnected = true;
+    } catch (err) {
+        console.error('Health check database error:', err);
+    } finally {
+        if (client) client.release();
+    }
+
+    if (dbConnected) {
+        res.status(200).json({
+            status: 'healthy',
+            message: 'All API endpoints are fully active and operational.',
+            timestamp: new Date().toISOString()
+        });
+    } else {
+        res.status(503).json({
+            status: 'unhealthy',
+            message: 'API service is currently inactive. One or more core endpoints are offline.',
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 // Payment status page
