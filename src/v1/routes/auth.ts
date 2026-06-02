@@ -212,13 +212,18 @@ const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
 router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Response) => {
     const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, amount } = req.body;
 
-    if (!name || !merchant_name || !email || !phone || !address || !city || !subdistrict || !regency || !province || !postal_code) {
-        return res.status(400).json({ error: 'All fields are required: name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code' });
+    if (!name || !merchant_name || !email || !phone || !address || !city || !subdistrict || !regency || !province || !postal_code || amount === undefined || amount === null || amount === '') {
+        return res.status(400).json({ error: 'All fields are required: name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, amount' });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
         return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    const parsedAmount = parseFloat(amount.toString());
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+        return res.status(400).json({ error: 'Invalid amount value' });
     }
 
     const sanitizedName = sanitizeString(name, 100);
@@ -237,8 +242,8 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     }
 
     // Determine package and amount
-    const packageName = pkg || (amount > 0 ? 'premium' : 'trial');
-    const packageAmount = amount || (packageName === 'trial' ? 0 : 145000);
+    const packageName = parsedAmount === 0 ? 'trial' : 'premium';
+    const packageAmount = parsedAmount;
 
     if (!['trial', 'premium'].includes(packageName)) {
         return res.status(400).json({ error: 'Invalid package. Use "trial" or "premium"' });
