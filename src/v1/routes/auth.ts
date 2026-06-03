@@ -210,10 +210,10 @@ const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
 
 // API Register Merchant
 router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Response) => {
-    const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, amount } = req.body;
+    const { name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package: pkg, amount } = req.body;
 
-    if (!name || !merchant_name || !email || !phone || !address || !city || !subdistrict || !regency || !province || !postal_code || amount === undefined || amount === null || amount === '') {
-        return res.status(400).json({ error: 'All fields are required: name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, amount' });
+    if (!name || !merchant_name || !email || !phone || !province || !city || !district || !subdistrict || !postal_code || !street_address || amount === undefined || amount === null || amount === '') {
+        return res.status(400).json({ error: 'All fields are required: name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, amount' });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -230,14 +230,14 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     const sanitizedMerchantName = sanitizeString(merchant_name, 255);
     const sanitizedEmail = sanitizeString(email, 100)?.toLowerCase();
     const sanitizedPhone = sanitizeString(phone, 20);
-    const sanitizedAddress = sanitizeString(address, 500);
-    const sanitizedCity = sanitizeString(city, 100);
-    const sanitizedSubdistrict = sanitizeString(subdistrict, 100);
-    const sanitizedRegency = sanitizeString(regency, 100);
     const sanitizedProvince = sanitizeString(province, 100);
+    const sanitizedCity = sanitizeString(city, 100);
+    const sanitizedDistrict = sanitizeString(district, 100);
+    const sanitizedSubdistrict = sanitizeString(subdistrict, 100);
     const sanitizedPostalCode = sanitizeString(postal_code, 10);
+    const sanitizedStreetAddress = sanitizeString(street_address, 500);
 
-    if (!sanitizedName || !sanitizedMerchantName || !sanitizedEmail || !sanitizedPhone || !sanitizedAddress || !sanitizedCity || !sanitizedSubdistrict || !sanitizedRegency || !sanitizedProvince || !sanitizedPostalCode) {
+    if (!sanitizedName || !sanitizedMerchantName || !sanitizedEmail || !sanitizedPhone || !sanitizedProvince || !sanitizedCity || !sanitizedDistrict || !sanitizedSubdistrict || !sanitizedPostalCode || !sanitizedStreetAddress) {
         return res.status(400).json({ error: 'Invalid input data' });
     }
 
@@ -283,11 +283,11 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
         // If trial, activate immediately
         if (packageName === 'trial') {
             const insertQuery = `
-                INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package, amount, status, payment_status, midtrans_order_id, register_date, status_active)
+                INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_status, midtrans_order_id, register_date, status_active)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'trial', 'paid', NULL, NOW(), true)
                 RETURNING *
             `;
-            const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedAddress, sanitizedCity, sanitizedSubdistrict, sanitizedRegency, sanitizedProvince, sanitizedPostalCode, packageName, packageAmount]);
+            const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount]);
 
             // Send token email for trial
             await sendPaymentSuccessEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, token, packageName);
@@ -332,11 +332,11 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
 
         // Save to database with pending status
         const insertQuery = `
-            INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package, amount, status, payment_url, payment_status, midtrans_order_id, register_date, status_active)
+            INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_url, payment_status, midtrans_order_id, register_date, status_active)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', $15, 'pending', $16, NOW(), false)
             RETURNING *
         `;
-        const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedAddress, sanitizedCity, sanitizedSubdistrict, sanitizedRegency, sanitizedProvince, sanitizedPostalCode, packageName, packageAmount, paymentUrl, midtransOrderId]);
+        const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, paymentUrl, midtransOrderId]);
 
         // Send payment email
         await sendPaymentEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, paymentUrl, packageAmount, packageName);
@@ -422,12 +422,12 @@ router.get('/merchants', verifyApiAuth, async (req: Request, res: Response) => {
                 merchant_name,
                 email,
                 phone,
-                address,
-                city,
-                subdistrict,
-                regency,
                 province,
+                city,
+                district,
+                subdistrict,
                 postal_code,
+                street_address,
                 package,
                 amount,
                 status,
@@ -519,7 +519,7 @@ router.get('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
 // Update Merchant (Protected)
 router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Response) => {
     const { token } = req.params;
-    const { name, merchant_name, email, phone, address, city, subdistrict, regency, province, postal_code, package: pkg, status, status_active, register_date } = req.body;
+    const { name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package: pkg, status, status_active, register_date } = req.body;
     let client;
     try {
         client = await pool.connect();
@@ -547,12 +547,12 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
         const sanitizedMerchantName = sanitizeString(merchant_name, 255) || existingMerchant.merchant_name;
         const sanitizedEmail = (email ? sanitizeString(email, 100)?.toLowerCase() : existingMerchant.email);
         const sanitizedPhone = sanitizeString(phone, 20) || existingMerchant.phone;
-        const sanitizedAddress = address !== undefined ? (sanitizeString(address, 500) || null) : existingMerchant.address;
-        const sanitizedCity = city !== undefined ? (sanitizeString(city, 100) || null) : existingMerchant.city;
-        const sanitizedSubdistrict = subdistrict !== undefined ? (sanitizeString(subdistrict, 100) || null) : existingMerchant.subdistrict;
-        const sanitizedRegency = regency !== undefined ? (sanitizeString(regency, 100) || null) : existingMerchant.regency;
         const sanitizedProvince = province !== undefined ? (sanitizeString(province, 100) || null) : existingMerchant.province;
+        const sanitizedCity = city !== undefined ? (sanitizeString(city, 100) || null) : existingMerchant.city;
+        const sanitizedDistrict = district !== undefined ? (sanitizeString(district, 100) || null) : existingMerchant.district;
+        const sanitizedSubdistrict = subdistrict !== undefined ? (sanitizeString(subdistrict, 100) || null) : existingMerchant.subdistrict;
         const sanitizedPostalCode = postal_code !== undefined ? (sanitizeString(postal_code, 10) || null) : existingMerchant.postal_code;
+        const sanitizedStreetAddress = street_address !== undefined ? (sanitizeString(street_address, 500) || null) : existingMerchant.street_address;
         const sanitizedPackage = pkg || existingMerchant.package;
         const sanitizedStatus = status || existingMerchant.status;
         const sanitizedStatusActive = status_active !== undefined ? Boolean(status_active) : existingMerchant.status_active;
@@ -593,12 +593,12 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
                 merchant_name = $2,
                 email = $3,
                 phone = $4,
-                address = $5,
+                province = $5,
                 city = $6,
-                subdistrict = $7,
-                regency = $8,
-                province = $9,
-                postal_code = $10,
+                district = $7,
+                subdistrict = $8,
+                postal_code = $9,
+                street_address = $10,
                 package = $11,
                 status = $12,
                 status_active = $13,
@@ -613,12 +613,12 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
             sanitizedMerchantName,
             sanitizedEmail,
             sanitizedPhone,
-            sanitizedAddress,
-            sanitizedCity,
-            sanitizedSubdistrict,
-            sanitizedRegency,
             sanitizedProvince,
+            sanitizedCity,
+            sanitizedDistrict,
+            sanitizedSubdistrict,
             sanitizedPostalCode,
+            sanitizedStreetAddress,
             sanitizedPackage,
             sanitizedStatus,
             sanitizedStatusActive,

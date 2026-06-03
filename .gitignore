@@ -17,6 +17,7 @@ dist
 API_REGISTRATION_SPEC.md
 generate-signature.js
 postman_collection.json
+src/public/
 
 # Logs
 *.log

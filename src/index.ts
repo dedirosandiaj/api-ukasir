@@ -41,13 +41,27 @@ app.use(cors({
                 callback(null, true);
             });
     },
-    methods: ['GET', 'POST'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'x-api-key', 'x-timestamp', 'x-signature']
 }));
 app.use(express.json({ limit: '10kb' }));
 
 // Serve static files (uploads)
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
+// API Documentation
+app.get('/docs', (req: Request, res: Response) => {
+    res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src https://fonts.gstatic.com; " +
+        "connect-src *; " +
+        "img-src 'self' data:;"
+    );
+    res.sendFile(path.join(process.cwd(), 'src', 'public', 'api-docs.html'));
+});
 
 // Rate limiting - 100 requests per 15 minutes per IP
 const limiter = rateLimit({
