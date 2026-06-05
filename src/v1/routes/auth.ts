@@ -35,6 +35,9 @@ const getSmtpTransporter = async () => {
         auth: {
             user,
             pass
+        },
+        tls: {
+            rejectUnauthorized: false
         }
     });
 };
@@ -42,7 +45,7 @@ const getSmtpTransporter = async () => {
 const router = Router();
 
 // Helper function to send payment email
-const sendPaymentEmail = async (email: string, name: string, merchantName: string, paymentUrl: string, amount: number, packageName: string) => {
+const sendPaymentEmail = async (email: string, name: string, merchantName: string, paymentUrl: string, amount: number, packageName: string, activationLink?: string) => {
     try {
         const smtpFrom = await getConfig('SMTP_FROM', 'Ukasir <noreply@ukasir.id>');
         const mailOptions = {
@@ -72,6 +75,14 @@ const sendPaymentEmail = async (email: string, name: string, merchantName: strin
                             Pay Now
                         </a>
                     </div>
+
+                    ${activationLink ? `
+                    <div style="background: #f0fdf4; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #16a34a;">
+                        <h3 style="margin: 0 0 10px 0; color: #166534;">Aktivasi Akun (Setelah Pembayaran):</h3>
+                        <p style="margin: 5px 0; font-size: 14px; color: #374151;">Setelah menyelesaikan pembayaran, Anda dapat mengaktifkan akun Anda secara manual menggunakan link berikut:</p>
+                        <p style="margin: 10px 0; text-align: center;"><a href="${activationLink}" style="background: #16a34a; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Aktifkan Akun Saya</a></p>
+                    </div>
+                    ` : ''}
                     
                     <p style="color: #6b7280; font-size: 14px;">This payment link will expire in 24 hours.</p>
                     <p style="color: #6b7280; font-size: 14px;">If you have any questions, please contact our support team.</p>
@@ -91,23 +102,37 @@ const sendPaymentEmail = async (email: string, name: string, merchantName: strin
 };
 
 // Helper function to send payment success email with token
-const sendPaymentSuccessEmail = async (email: string, name: string, merchantName: string, token: string, packageName: string) => {
+const sendPaymentSuccessEmail = async (email: string, name: string, merchantName: string, token: string, packageName: string, activationLink?: string) => {
     try {
         const smtpFrom = await getConfig('SMTP_FROM', 'Ukasir <noreply@ukasir.id>');
+        const isTrial = packageName === 'trial';
         const mailOptions = {
             from: smtpFrom,
             to: email,
-            subject: 'Payment Successful - Your Ukasir Token',
+            subject: isTrial ? 'Welcome to Ukasir - Your Trial Token' : 'Payment Successful - Your Ukasir Token',
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                    <h2 style="color: #10b981;">🎉 Payment Successful!</h2>
-                    <p>Thank you for your payment. Your Ukasir account is now active!</p>
+                    <h2 style="color: ${isTrial ? '#2563eb' : '#10b981'};">${isTrial ? '🎉 Welcome to Ukasir!' : '🎉 Payment Successful!'}</h2>
+                    <p>${isTrial ? 'Thank you for registering. Your Ukasir account has been created!' : 'Thank you for your payment. Your Ukasir account is now active!'}</p>
                     
                     <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
                         <h3 style="margin: 0 0 10px 0;">Account Details:</h3>
                         <p style="margin: 5px 0;"><strong>Name:</strong> ${name}</p>
                         <p style="margin: 5px 0;"><strong>Merchant:</strong> ${merchantName}</p>
                     </div>
+
+                    ${activationLink ? `
+                    <div style="background: #e0f2fe; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0284c7;">
+                        <h3 style="margin: 0 0 10px 0; color: #0369a1;">Aktivasi Akun Anda:</h3>
+                        <p style="margin: 5px 0; font-size: 14px; color: #334155;">Silakan aktifkan token Anda terlebih dahulu dengan mengklik tombol di bawah ini:</p>
+                        <div style="text-align: center; margin: 15px 0;">
+                            <a href="${activationLink}" 
+                               style="background: #0284c7; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+                                Aktifkan Akun
+                            </a>
+                        </div>
+                    </div>
+                    ` : ''}
                     
                     <div style="background: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
                         <h3 style="margin: 0 0 10px 0;">Your Activation Token:</h3>
@@ -118,6 +143,7 @@ const sendPaymentSuccessEmail = async (email: string, name: string, merchantName
                     <div style="background: #dbeafe; padding: 20px; border-radius: 8px; margin: 20px 0;">
                         <h3 style="margin: 0 0 10px 0;">Next Steps:</h3>
                         <ol style="margin: 10px 0; padding-left: 20px;">
+                            ${activationLink ? '<li>Klik tombol "Aktifkan Akun" di atas</li>' : ''}
                             <li>Open Ukasir app</li>
                             <li>Enter your token number</li>
                             <li>Start using Ukasir!</li>
@@ -140,6 +166,143 @@ const sendPaymentSuccessEmail = async (email: string, name: string, merchantName
         console.error('Failed to send payment success email:', error);
     }
 };
+
+// Helper function to render a premium activation page
+const renderActivationPage = (success: boolean, message: string): string => {
+    return `
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${success ? 'Aktivasi Berhasil' : 'Aktivasi Gagal'} - Ukasir</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: radial-gradient(circle at top right, #f5f3ff, #e0e7ff);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #1e1b4b;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(99, 102, 241, 0.1);
+            max-width: 480px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+            animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .icon-wrapper {
+            width: 96px;
+            height: 96px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            font-size: 48px;
+            animation: scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        @keyframes scaleIn {
+            from {
+                transform: scale(0);
+            }
+            to {
+                transform: scale(1);
+            }
+        }
+        .success-icon {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            box-shadow: 0 10px 20px rgba(16, 185, 129, 0.2);
+        }
+        .error-icon {
+            background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+            color: white;
+            box-shadow: 0 10px 20px rgba(244, 63, 94, 0.2);
+        }
+        h1 {
+            font-size: 28px;
+            font-weight: 800;
+            margin-bottom: 16px;
+            background: linear-gradient(to right, #4f46e5, #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        p {
+            font-size: 16px;
+            line-height: 1.6;
+            color: #4b5563;
+            margin-bottom: 32px;
+        }
+        .btn {
+            display: inline-block;
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 14px;
+            font-weight: 600;
+            font-size: 16px;
+            box-shadow: 0 10px 20px rgba(79, 70, 229, 0.25);
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 25px rgba(79, 70, 229, 0.35);
+        }
+        .btn:active {
+            transform: translateY(0);
+        }
+        .footer {
+            margin-top: 32px;
+            font-size: 13px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon-wrapper ${success ? 'success-icon' : 'error-icon'}">
+            ${success ? '✓' : '✕'}
+        </div>
+        <h1>${success ? 'Aktivasi Berhasil' : 'Aktivasi Gagal'}</h1>
+        <p>${message}</p>
+        <a href="ukasir://" class="btn">Buka Aplikasi Ukasir</a>
+        <div class="footer">
+            &copy; 2026 Ukasir. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>
+    `;
+};
+
 
 // Input sanitization helpers
 const sanitizeString = (input: any, maxLength: number = 255): string | null => {
@@ -210,7 +373,23 @@ const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
 
 // API Register Merchant
 router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Response) => {
-    const { name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package: pkg, amount } = req.body;
+    const { 
+        name, 
+        merchant_name, 
+        email, 
+        phone, 
+        province, 
+        city, 
+        district, 
+        subdistrict, 
+        postal_code, 
+        street_address, 
+        package: pkg, 
+        amount,
+        device_id,
+        device_name,
+        device_type 
+    } = req.body;
 
     if (!name || !merchant_name || !email || !phone || !province || !city || !district || !subdistrict || !postal_code || !street_address || amount === undefined || amount === null || amount === '') {
         return res.status(400).json({ error: 'All fields are required: name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, amount' });
@@ -236,6 +415,9 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     const sanitizedSubdistrict = sanitizeString(subdistrict, 100);
     const sanitizedPostalCode = sanitizeString(postal_code, 10);
     const sanitizedStreetAddress = sanitizeString(street_address, 500);
+    const sanitizedDeviceId = sanitizeString(device_id, 255);
+    const sanitizedDeviceName = sanitizeString(device_name, 255);
+    const sanitizedDeviceType = sanitizeString(device_type, 255);
 
     if (!sanitizedName || !sanitizedMerchantName || !sanitizedEmail || !sanitizedPhone || !sanitizedProvince || !sanitizedCity || !sanitizedDistrict || !sanitizedSubdistrict || !sanitizedPostalCode || !sanitizedStreetAddress) {
         return res.status(400).json({ error: 'Invalid input data' });
@@ -277,20 +459,35 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             return res.status(409).json({ error: errorMessage });
         }
 
+        // Check if device_id, device_name, and device_type combination is already registered
+        if (sanitizedDeviceId && sanitizedDeviceName && sanitizedDeviceType) {
+            const deviceCheckQuery = `
+                SELECT token_number FROM merchants 
+                WHERE device_id = $1 AND device_name = $2 AND device_type = $3
+                LIMIT 1
+            `;
+            const deviceCheckResult = await client.query(deviceCheckQuery, [sanitizedDeviceId, sanitizedDeviceName, sanitizedDeviceType]);
+            
+            if (deviceCheckResult.rows.length > 0) {
+                return res.status(409).json({ error: 'perangkat anda sudah terdaftar' });
+            }
+        }
+
         const token = generateToken();
         const orderId = `${packageName === 'trial' ? 'TRIAL' : 'PREMIUM'}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const activationLink = `${req.protocol}://${req.get('host')}/v1/activate-merchant?token=${token}`;
 
-        // If trial, activate immediately
+        // If trial, register with inactive status
         if (packageName === 'trial') {
             const insertQuery = `
-                INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_status, midtrans_order_id, register_date, status_active)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'trial', 'paid', NULL, NOW(), true)
+                INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_status, midtrans_order_id, register_date, status_active, device_id, device_name, device_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'trial', 'paid', NULL, NOW(), false, $15, $16, $17)
                 RETURNING *
             `;
-            const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount]);
+            const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, sanitizedDeviceId, sanitizedDeviceName, sanitizedDeviceType]);
 
-            // Send token email for trial
-            await sendPaymentSuccessEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, token, packageName);
+            // Send token email for trial with activation link
+            await sendPaymentSuccessEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, token, packageName, activationLink);
 
             return res.status(201).json({
                 success: true,
@@ -301,6 +498,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                     package: 'trial',
                     status: 'trial',
                     payment_status: 'paid',
+                    activation_url: activationLink,
                     ...result.rows[0]
                 }
             });
@@ -330,16 +528,16 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
         const transaction = await snap.createTransaction(transactionDetails);
         const paymentUrl = transaction.redirect_url;
 
-        // Save to database with pending status
+        // Save to database with pending status and inactive status_active
         const insertQuery = `
-            INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_url, payment_status, midtrans_order_id, register_date, status_active)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', $15, 'pending', $16, NOW(), false)
+            INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_url, payment_status, midtrans_order_id, register_date, status_active, device_id, device_name, device_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', $15, 'pending', $16, NOW(), false, $17, $18, $19)
             RETURNING *
         `;
-        const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, paymentUrl, midtransOrderId]);
+        const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, paymentUrl, midtransOrderId, sanitizedDeviceId, sanitizedDeviceName, sanitizedDeviceType]);
 
-        // Send payment email
-        await sendPaymentEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, paymentUrl, packageAmount, packageName);
+        // Send payment email with activation link
+        await sendPaymentEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, paymentUrl, packageAmount, packageName, activationLink);
 
         return res.status(201).json({
             success: true,
@@ -353,6 +551,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 payment_status: 'pending',
                 payment_url: paymentUrl,
                 midtrans_order_id: midtransOrderId,
+                activation_url: activationLink,
                 instruction: 'Please complete payment within 24 hours'
             }
         });
@@ -370,6 +569,52 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             error: 'Internal Server Error',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// GET Activate Merchant
+router.get('/activate-merchant', async (req: Request, res: Response) => {
+    const token = req.query.token as string;
+
+    if (!token || !isValidTokenFormat(token)) {
+        return res.status(400).send(renderActivationPage(false, 'Format token tidak valid. Token harus berformat XXXX-XXXX-XXXX-XXXX.'));
+    }
+
+    let client;
+    try {
+        client = await pool.connect();
+
+        // Get merchant details
+        const query = 'SELECT token_number, status_active, package, payment_status FROM merchants WHERE token_number = $1';
+        const result = await client.query(query, [token]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).send(renderActivationPage(false, 'Token merchant tidak ditemukan.'));
+        }
+
+        const merchant = result.rows[0];
+
+        // Check if premium package requires payment first
+        if (merchant.package === 'premium' && merchant.payment_status !== 'paid') {
+            return res.status(400).send(renderActivationPage(false, 'Silakan selesaikan pembayaran Anda terlebih dahulu sebelum mengaktifkan akun.'));
+        }
+
+        // If already active
+        if (merchant.status_active) {
+            return res.send(renderActivationPage(true, 'Akun Anda sudah aktif sebelumnya. Silakan gunakan token untuk login di aplikasi Ukasir.'));
+        }
+
+        // Activate merchant
+        const updateQuery = 'UPDATE merchants SET status_active = true, updated_at = NOW() WHERE token_number = $1';
+        await client.query(updateQuery, [token]);
+
+        return res.send(renderActivationPage(true, 'Akun Ukasir Anda berhasil diaktifkan! Silakan gunakan token Anda untuk login di aplikasi.'));
+
+    } catch (error: any) {
+        console.error('Activation error:', error);
+        return res.status(500).send(renderActivationPage(false, 'Terjadi kesalahan pada server saat memproses aktivasi.'));
     } finally {
         if (client) client.release();
     }
