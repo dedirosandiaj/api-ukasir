@@ -544,8 +544,8 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
         `;
         const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, paymentUrl, midtransOrderId, sanitizedDeviceId, sanitizedDeviceName, sanitizedDeviceType]);
 
-        // Send payment email with activation link
-        await sendPaymentEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, paymentUrl, packageAmount, packageName, activationLink);
+        // Send payment email (payment button only, no activation link)
+        await sendPaymentEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, paymentUrl, packageAmount, packageName);
 
         return res.status(201).json({
             success: true,
@@ -1125,5 +1125,49 @@ router.get('/payment-status/:order_id', async (req: Request, res: Response) => {
         if (client) client.release();
     }
 });
+
+// Background job to send payment reminders every 5 minutes
+const REMINDER_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+setInterval(async () => {
+    let client;
+    try {
+        client = await pool.connect();
+        
+        // Find premium merchants with pending payment status registered in the last 24 hours
+        const query = `
+            SELECT token_number, name, merchant_name, email, payment_url, amount, package 
+            FROM merchants 
+            WHERE package = 'premium' 
+              AND payment_status = 'pending' 
+              AND created_at >= NOW() - INTERVAL '24 hours'
+        `;
+        const result = await client.query(query);
+        
+        if (result.rows.length > 0) {
+            console.log(`[Payment Reminder] Found ${result.rows.length} pending premium merchants. Sending emails...`);
+            for (const merchant of result.rows) {
+                try {
+                    const parsedAmount = parseFloat(merchant.amount);
+                    await sendPaymentEmail(
+                        merchant.email,
+                        merchant.name,
+                        merchant.merchant_name || merchant.name,
+                        merchant.payment_url,
+                        parsedAmount,
+                        merchant.package
+                    );
+                    console.log(`[Payment Reminder] Sent reminder email to ${merchant.email}`);
+                } catch (emailError) {
+                    console.error(`[Payment Reminder] Failed to send email to ${merchant.email}:`, emailError);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('[Payment Reminder] Cron job execution error:', error);
+    } finally {
+        if (client) client.release();
+    }
+}, REMINDER_INTERVAL);
 
 export default router;
