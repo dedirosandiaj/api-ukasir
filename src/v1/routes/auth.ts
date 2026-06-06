@@ -559,6 +559,12 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
     } catch (error: any) {
         console.error('Registration error:', error);
         
+        if (error.ApiResponse?.error_messages) {
+            console.error('Midtrans API Error Messages:', error.ApiResponse.error_messages);
+        } else if (error.response?.data) {
+            console.error('Midtrans Response Data:', JSON.stringify(error.response.data, null, 2));
+        }
+        
         if (error.code === '23505') {
             return res.status(409).json({
                 error: 'Email or phone already registered'
