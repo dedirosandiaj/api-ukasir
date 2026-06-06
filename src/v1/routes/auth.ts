@@ -123,8 +123,8 @@ const sendPaymentSuccessEmail = async (email: string, name: string, merchantName
 
                     ${activationLink ? `
                     <div style="background: #e0f2fe; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0284c7;">
-                        <h3 style="margin: 0 0 10px 0; color: #0369a1;">Aktivasi Akun Anda:</h3>
-                        <p style="margin: 5px 0; font-size: 14px; color: #334155;">Silakan aktifkan token Anda terlebih dahulu dengan mengklik tombol di bawah ini:</p>
+                        <h3 style="margin: 0 0 10px 0; color: #0369a1;">${isTrial ? 'Aktivasi Akun Anda:' : 'Aktivasi Akun (Setelah Pembayaran):'}</h3>
+                        <p style="margin: 5px 0; font-size: 14px; color: #334155;">${isTrial ? 'Silakan aktifkan token Anda terlebih dahulu dengan mengklik tombol di bawah ini:' : 'Setelah menyelesaikan pembayaran, Anda dapat mengaktifkan akun Anda secara manual menggunakan link berikut:'}</p>
                         <div style="text-align: center; margin: 15px 0;">
                             <a href="${activationLink}" 
                                style="background: #0284c7; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
@@ -168,7 +168,7 @@ const sendPaymentSuccessEmail = async (email: string, name: string, merchantName
 };
 
 // Helper function to render a premium activation page
-const renderActivationPage = (success: boolean, message: string): string => {
+const renderActivationPage = (success: boolean, message: string, exclusiveMerchant?: number | null): string => {
     return `
 <!DOCTYPE html>
 <html lang="id">
@@ -292,7 +292,15 @@ const renderActivationPage = (success: boolean, message: string): string => {
             ${success ? '✓' : '✕'}
         </div>
         <h1>${success ? 'Aktivasi Berhasil' : 'Aktivasi Gagal'}</h1>
-        <p>${message}</p>
+        <p style="margin-bottom: 24px;">${message}</p>
+        ${success && exclusiveMerchant ? `
+        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%); border: 1px dashed #f59e0b; padding: 16px; border-radius: 16px; margin-bottom: 28px; display: flex; align-items: center; justify-content: center; gap: 8px; text-align: left; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.08);">
+            <span style="font-size: 24px;">👑</span>
+            <span style="font-size: 14px; font-weight: 600; color: #b45309; line-height: 1.4;">
+                Selamat, Anda masuk dalam merchant eksklusif urutan <strong>#${exclusiveMerchant}</strong> dari 100!
+            </span>
+        </div>
+        ` : ''}
         <a href="ukasir://" class="btn">Buka Aplikasi Ukasir</a>
         <div class="footer">
             &copy; 2026 Ukasir. All rights reserved.
@@ -593,7 +601,7 @@ router.get('/activate-merchant', async (req: Request, res: Response) => {
         client = await pool.connect();
 
         // Get merchant details
-        const query = 'SELECT token_number, status_active, package, payment_status FROM merchants WHERE token_number = $1';
+        const query = 'SELECT token_number, status_active, package, payment_status, exclusive_merchant FROM merchants WHERE token_number = $1';
         const result = await client.query(query, [token]);
 
         if (result.rows.length === 0) {
@@ -609,14 +617,14 @@ router.get('/activate-merchant', async (req: Request, res: Response) => {
 
         // If already active
         if (merchant.status_active) {
-            return res.send(renderActivationPage(true, 'Akun Anda sudah aktif sebelumnya. Silakan gunakan token untuk login di aplikasi Ukasir.'));
+            return res.send(renderActivationPage(true, 'Akun Anda sudah aktif sebelumnya. Silakan gunakan token untuk login di aplikasi Ukasir.', merchant.exclusive_merchant));
         }
 
         // Activate merchant
         const updateQuery = 'UPDATE merchants SET status_active = true, updated_at = NOW() WHERE token_number = $1';
         await client.query(updateQuery, [token]);
 
-        return res.send(renderActivationPage(true, 'Akun Ukasir Anda berhasil diaktifkan! Silakan gunakan token Anda untuk login di aplikasi.'));
+        return res.send(renderActivationPage(true, 'Akun Ukasir Anda berhasil diaktifkan! Silakan gunakan token Anda untuk login di aplikasi.', merchant.exclusive_merchant));
 
     } catch (error: any) {
         console.error('Activation error:', error);
@@ -1053,12 +1061,14 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
         // Send success email with token if payment is successful
         if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
             const updatedMerchant = result.rows[0];
+            const activationLink = `${req.protocol}://${req.get('host')}/v1/activate-merchant?token=${updatedMerchant.token_number}`;
             await sendPaymentSuccessEmail(
                 updatedMerchant.email,
                 updatedMerchant.name,
                 updatedMerchant.merchant_name,
                 updatedMerchant.token_number,
-                updatedMerchant.package
+                updatedMerchant.package,
+                activationLink
             );
         }
 
