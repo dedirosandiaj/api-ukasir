@@ -35,6 +35,7 @@ model merchants {
   device_name      String?   @db.VarChar(255)
   device_type      String?   @db.VarChar(255)
   referral_code    String?   @db.VarChar(255)
+  exclusive_merchant Int?    @unique
   created_at       DateTime  @default(now()) @db.Timestamptz(6)
   updated_at       DateTime  @default(now()) @db.Timestamptz(6)
 }

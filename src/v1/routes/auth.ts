@@ -686,6 +686,7 @@ router.get('/merchants', verifyApiAuth, async (req: Request, res: Response) => {
                 device_name,
                 device_type,
                 referral_code,
+                exclusive_merchant,
                 created_at,
                 updated_at
             FROM merchants 
@@ -764,7 +765,7 @@ router.get('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
 // Update Merchant (Protected)
 router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Response) => {
     const { token } = req.params;
-    const { name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package: pkg, status, status_active, register_date } = req.body;
+    const { name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package: pkg, status, status_active, register_date, exclusive_merchant } = req.body;
     let client;
     try {
         client = await pool.connect();
@@ -802,6 +803,14 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
         const sanitizedStatus = status || existingMerchant.status;
         const sanitizedStatusActive = status_active !== undefined ? Boolean(status_active) : existingMerchant.status_active;
         const sanitizedRegisterDate = register_date !== undefined ? new Date(register_date) : existingMerchant.register_date;
+
+        const sanitizedExclusiveMerchant = exclusive_merchant !== undefined
+            ? (exclusive_merchant === null || exclusive_merchant === '' ? null : parseInt(exclusive_merchant.toString(), 10))
+            : existingMerchant.exclusive_merchant;
+
+        if (sanitizedExclusiveMerchant !== null && (isNaN(sanitizedExclusiveMerchant) || sanitizedExclusiveMerchant < 1)) {
+            return res.status(400).json({ error: 'Invalid exclusive_merchant. Must be a positive integer or null.' });
+        }
 
         if (!sanitizedName || !sanitizedEmail || !sanitizedPhone) {
             return res.status(400).json({ error: 'Invalid input data' });
@@ -848,8 +857,9 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
                 status = $12,
                 status_active = $13,
                 register_date = $14,
+                exclusive_merchant = $15,
                 updated_at = NOW()
-            WHERE token_number = $15
+            WHERE token_number = $16
             RETURNING *
         `;
 
@@ -868,6 +878,7 @@ router.put('/merchants/:token', verifyApiAuth, async (req: Request, res: Respons
             sanitizedStatus,
             sanitizedStatusActive,
             sanitizedRegisterDate,
+            sanitizedExclusiveMerchant,
             token
         ]);
 
@@ -969,11 +980,15 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
     try {
         client = await pool.connect();
 
-        // Find merchant by midtrans_order_id
-        const findQuery = 'SELECT * FROM merchants WHERE midtrans_order_id = $1';
+        // Start transaction
+        await client.query('BEGIN');
+
+        // Find merchant by midtrans_order_id and lock the row
+        const findQuery = 'SELECT * FROM merchants WHERE midtrans_order_id = $1 FOR UPDATE';
         const findResult = await client.query(findQuery, [orderId]);
 
         if (findResult.rows.length === 0) {
+            await client.query('ROLLBACK');
             return res.status(404).json({ error: 'Order not found' });
         }
 
@@ -984,6 +999,7 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
         let newPaymentStatus = transactionStatus;
         let statusActive = merchant.status_active;
         let paidAt = merchant.paid_at;
+        let exclusiveMerchant = merchant.exclusive_merchant;
 
         if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
             // Payment successful
@@ -991,6 +1007,20 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
             newStatus = 'premium';
             statusActive = true;
             paidAt = new Date();
+
+            // Assign exclusive_merchant number if not already assigned and is a premium package
+            if (merchant.package === 'premium' && !exclusiveMerchant) {
+                // Lock the merchants table to serialize exclusive_merchant calculations across concurrent requests
+                await client.query('LOCK TABLE merchants IN SHARE ROW EXCLUSIVE MODE');
+
+                const maxQuery = 'SELECT COALESCE(MAX(exclusive_merchant), 0) as max_val FROM merchants';
+                const maxResult = await client.query(maxQuery);
+                const maxVal = parseInt(maxResult.rows[0].max_val, 10);
+
+                if (maxVal < 100) {
+                    exclusiveMerchant = maxVal + 1;
+                }
+            }
         } else if (transactionStatus === 'pending') {
             // Waiting for payment
             newPaymentStatus = 'pending';
@@ -1003,13 +1033,16 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
         // Update database
         const updateQuery = `
             UPDATE merchants 
-            SET status = $1, payment_status = $2, status_active = $3, paid_at = $4, payment_method = $5, updated_at = NOW()
-            WHERE midtrans_order_id = $6
+            SET status = $1, payment_status = $2, status_active = $3, paid_at = $4, payment_method = $5, exclusive_merchant = $6, updated_at = NOW()
+            WHERE midtrans_order_id = $7
             RETURNING *
         `;
-        const result = await client.query(updateQuery, [newStatus, newPaymentStatus, statusActive, paidAt, paymentType, orderId]);
+        const result = await client.query(updateQuery, [newStatus, newPaymentStatus, statusActive, paidAt, paymentType, exclusiveMerchant, orderId]);
 
-        console.log(`Payment updated: ${orderId} - ${transactionStatus}`);
+        // Commit transaction
+        await client.query('COMMIT');
+
+        console.log(`Payment updated: ${orderId} - ${transactionStatus}, Exclusive Merchant #: ${exclusiveMerchant || 'None'}`);
 
         // Send success email with token if payment is successful
         if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
@@ -1030,6 +1063,13 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
 
     } catch (error: any) {
         console.error('Webhook error:', error);
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+        }
         return res.status(500).json({
             error: 'Internal Server Error',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
