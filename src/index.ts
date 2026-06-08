@@ -1,10 +1,11 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
 import { Pool } from 'pg';
+import multer from 'multer';
 import v1Routes from './v1';
 import { getConfig } from './utils/config';
 
@@ -330,6 +331,22 @@ function getButtons(status: string): string {
 
 // Mount v1 routes
 app.use('/v1', v1Routes);
+
+// Error handling middleware
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    if (err instanceof multer.MulterError) {
+        return res.status(400).json({ error: err.message });
+    }
+    if (err.message && err.message.includes('Only image files are allowed')) {
+        return res.status(400).json({ error: err.message });
+    }
+    
+    console.error('Unhandled Server Error:', err);
+    return res.status(500).json({ 
+        error: 'Internal Server Error',
+        details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+});
 
 // Vercel requires exporting the app
 export default app;
