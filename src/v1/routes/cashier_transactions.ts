@@ -217,4 +217,73 @@ router.get('/cashier-transactions/:order_id', verifyApiAuth, async (req: Request
     }
 });
 
+// 3. Cancel Cashier Transaction (Authenticated clients)
+router.post('/cashier-transactions/:order_id/cancel', verifyApiAuth, async (req: Request, res: Response) => {
+    const { order_id } = req.params;
+    const { token_number } = req.body;
+    let client;
+
+    try {
+        if (!token_number) {
+            return res.status(400).json({ error: 'token_number is required in request body' });
+        }
+
+        if (!isValidTokenFormat(token_number)) {
+            return res.status(400).json({ error: 'Invalid token format. Expected: XXXX-XXXX-XXXX-XXXX' });
+        }
+
+        const sanitizedToken = sanitizeString(token_number, 255);
+        if (!sanitizedToken) {
+            return res.status(400).json({ error: 'Invalid token data' });
+        }
+
+        client = await pool.connect();
+
+        // Check if transaction exists and belongs to this token
+        const checkQuery = 'SELECT * FROM cashier_transactions WHERE order_id = $1 AND token_number = $2 LIMIT 1';
+        const checkRes = await client.query(checkQuery, [order_id, sanitizedToken]);
+
+        if (checkRes.rows.length === 0) {
+            return res.status(404).json({ error: 'Transaction not found or token mismatch' });
+        }
+
+        const tx = checkRes.rows[0];
+        const status = tx.payment_status;
+
+        // If already paid, reject cancel
+        if (status === 'settlement' || status === 'capture' || status === 'paid') {
+            return res.status(400).json({ 
+                error: 'Transaksi sudah berhasil dibayar dan tidak dapat dibatalkan.' 
+            });
+        }
+
+        // Try to cancel in Midtrans first
+        try {
+            const core = await getMidtransCore();
+            await core.transaction.cancel(order_id);
+        } catch (midtransError: any) {
+            // Log warning but don't block DB deletion (in case it is already expired/cancelled on Midtrans side)
+            console.warn(`Midtrans cancel failed for ${order_id}:`, midtransError.message || midtransError);
+        }
+
+        // Delete from local database
+        const deleteQuery = 'DELETE FROM cashier_transactions WHERE order_id = $1 AND token_number = $2';
+        await client.query(deleteQuery, [order_id, sanitizedToken]);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Transaction cancelled and removed from database successfully'
+        });
+
+    } catch (error: any) {
+        console.error('Cancel cashier transaction error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 export default router;
