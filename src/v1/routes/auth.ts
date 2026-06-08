@@ -997,6 +997,33 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
         // Start transaction
         await client.query('BEGIN');
 
+        // Check if cashier transaction
+        if (orderId && orderId.startsWith('TRX-')) {
+            let newPaymentStatus = 'pending';
+            if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
+                newPaymentStatus = 'paid';
+            } else if (transactionStatus === 'expire') {
+                newPaymentStatus = 'expired';
+            } else if (transactionStatus === 'cancel' || transactionStatus === 'deny') {
+                newPaymentStatus = 'failed';
+            }
+
+            const updateQuery = `
+                UPDATE cashier_transactions 
+                SET payment_status = $1, updated_at = NOW()
+                WHERE order_id = $2
+                RETURNING *
+            `;
+            await client.query(updateQuery, [newPaymentStatus, orderId]);
+            await client.query('COMMIT');
+            
+            console.log(`Cashier transaction updated: ${orderId} - ${newPaymentStatus}`);
+            return res.json({
+                status: 'ok',
+                message: 'Cashier payment notification received'
+            });
+        }
+
         // Find merchant by midtrans_order_id and lock the row
         const findQuery = 'SELECT * FROM merchants WHERE midtrans_order_id = $1 FOR UPDATE';
         const findResult = await client.query(findQuery, [orderId]);

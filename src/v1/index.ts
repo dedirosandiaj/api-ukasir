@@ -3,6 +3,9 @@ import authRoutes from './routes/auth';
 import tokenRoutes from './routes/token';
 import productRoutes from './routes/products';
 import notificationRoutes from './routes/notifications';
+import bankEwalletRoutes from './routes/bank_ewallets';
+import qrisActivationRoutes from './routes/qris_activations';
+import cashierTransactionRoutes from './routes/cashier_transactions';
 
 const router = Router();
 
@@ -11,5 +14,8 @@ router.use(authRoutes);
 router.use(tokenRoutes);
 router.use(productRoutes);
 router.use(notificationRoutes);
+router.use(bankEwalletRoutes);
+router.use(qrisActivationRoutes);
+router.use(cashierTransactionRoutes);
 
 export default router;

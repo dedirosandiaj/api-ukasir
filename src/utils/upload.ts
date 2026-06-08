@@ -87,3 +87,42 @@ export const getFilenameFromUrl = (url: string): string => {
     if (!url) return '';
     return url.split('/').pop() || '';
 };
+
+// Upload QRIS file to S3 (bucket: qris-activation)
+export const uploadQrisToS3 = async (file: Express.Multer.File): Promise<string> => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext);
+    const filename = `qris-${uniqueSuffix}-${name}${ext}`;
+
+    const params = {
+        Bucket: process.env.S3_QRIS_BUCKET || 'qris-activation',
+        Key: filename,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: 'public-read'
+    };
+
+    const result = await s3.upload(params).promise();
+    return result.Location;
+};
+
+// Delete QRIS file from S3 (bucket: qris-activation)
+export const deleteQrisFromS3 = async (fileUrl: string): Promise<void> => {
+    if (!fileUrl) return;
+    
+    const filename = getFilenameFromUrl(fileUrl);
+    if (!filename) return;
+
+    const params = {
+        Bucket: process.env.S3_QRIS_BUCKET || 'qris-activation',
+        Key: filename
+    };
+
+    try {
+        await s3.deleteObject(params).promise();
+    } catch (error) {
+        console.error('Error deleting file from QRIS S3:', error);
+    }
+};
+
