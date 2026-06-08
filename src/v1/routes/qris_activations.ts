@@ -184,7 +184,58 @@ router.post('/qris-activations', verifyApiAuth, qrisUploadFields, async (req: Re
     }
 });
 
-// 2. Get All QRIS Activation Requests (Superadmin only)
+// 2. Check QRIS Activation Status by token_number (Public - client endpoint)
+router.get('/qris-activations/check-status', verifyApiAuth, async (req: Request, res: Response) => {
+    const token_number = req.query.token_number as string;
+    let client;
+
+    try {
+        if (!token_number) {
+            return res.status(400).json({ error: 'token_number query parameter is required' });
+        }
+
+        if (!isValidTokenFormat(token_number)) {
+            return res.status(400).json({ error: 'Invalid token format. Expected: XXXX-XXXX-XXXX-XXXX' });
+        }
+
+        client = await pool.connect();
+
+        const query = `
+            SELECT token_number, status
+            FROM qris_activations
+            WHERE token_number = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+        `;
+        const result = await client.query(query, [token_number]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'No QRIS activation request found for this token' 
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                token_number: result.rows[0].token_number,
+                status: result.rows[0].status
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Check QRIS activation status error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// 3. Get All QRIS Activation Requests (Superadmin only)
 router.get('/qris-activations', verifyApiAuth, verifySuperAdmin, async (req: Request, res: Response) => {
     let client;
     try {
