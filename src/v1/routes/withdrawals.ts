@@ -296,34 +296,129 @@ router.post('/withdrawals', verifyApiAuth, async (req: Request, res: Response) =
     }
 });
 
-// 3. Get Withdrawal Requests History (Authenticated clients)
+// 3. Get Withdrawal Requests History (Authenticated clients / Superadmin)
 router.get('/withdrawals', verifyApiAuth, async (req: Request, res: Response) => {
-    const { token_number } = req.query;
+    const { token_number, page, limit, status, search } = req.query;
+    const role = req.headers['x-role'] as string;
+    const superadminSecret = req.headers['x-superadmin-secret'] as string;
+    const envSecret = process.env.SUPERADMIN_SECRET;
+
+    const isSuperAdmin = role === 'superadmin' || (envSecret && superadminSecret === envSecret);
     let client;
 
     try {
-        if (!token_number) {
-            return res.status(400).json({ error: 'token_number query parameter is required' });
-        }
-
-        if (!isValidTokenFormat(token_number)) {
-            return res.status(400).json({ error: 'Invalid token format. Expected: XXXX-XXXX-XXXX-XXXX' });
-        }
-
-        const sanitizedToken = sanitizeString(token_number, 255);
-        if (!sanitizedToken) {
-            return res.status(400).json({ error: 'Invalid token data' });
-        }
-
         client = await pool.connect();
 
-        const query = 'SELECT * FROM withdrawals WHERE token_number = $1 ORDER BY created_at DESC LIMIT 100';
-        const result = await client.query(query, [sanitizedToken]);
+        if (isSuperAdmin) {
+            // Superadmin view: list all/filtered withdrawals with pagination and join on merchants
+            const pageNum = parseInt(page as string) || 1;
+            const limitNum = parseInt(limit as string) || 20;
+            const offset = (pageNum - 1) * limitNum;
 
-        return res.status(200).json({
-            success: true,
-            data: result.rows
-        });
+            let whereConditions: string[] = [];
+            let queryParams: any[] = [];
+            let paramIndex = 1;
+
+            if (status) {
+                whereConditions.push(`w.status = $${paramIndex}`);
+                queryParams.push(status);
+                paramIndex++;
+            }
+
+            if (token_number) {
+                whereConditions.push(`w.token_number = $${paramIndex}`);
+                queryParams.push(token_number);
+                paramIndex++;
+            }
+
+            if (search) {
+                whereConditions.push(`(
+                    w.token_number ILIKE $${paramIndex} OR 
+                    w.bank_name ILIKE $${paramIndex} OR 
+                    w.account_number ILIKE $${paramIndex} OR 
+                    w.account_name ILIKE $${paramIndex} OR
+                    m.merchant_name ILIKE $${paramIndex} OR
+                    m.name ILIKE $${paramIndex}
+                )`);
+                queryParams.push(`%${search}%`);
+                paramIndex++;
+            }
+
+            const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+            // Get total count
+            const countQuery = `
+                SELECT COUNT(*) 
+                FROM withdrawals w
+                LEFT JOIN merchants m ON w.token_number = m.token_number
+                ${whereClause}
+            `;
+            const countResult = await client.query(countQuery, queryParams);
+            const total = parseInt(countResult.rows[0].count);
+
+            // Get details
+            const dataQuery = `
+                SELECT 
+                    w.id,
+                    w.token_number,
+                    w.amount,
+                    w.status,
+                    w.bank_name,
+                    w.account_number,
+                    w.account_name,
+                    w.reason,
+                    w.created_at,
+                    w.updated_at,
+                    m.name as merchant_owner_name,
+                    m.merchant_name as merchant_name
+                FROM withdrawals w
+                LEFT JOIN merchants m ON w.token_number = m.token_number
+                ${whereClause}
+                ORDER BY w.created_at DESC
+                LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+            `;
+
+            queryParams.push(limitNum, offset);
+            const dataResult = await client.query(dataQuery, queryParams);
+
+            const totalPages = Math.ceil(total / limitNum);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Withdrawal requests retrieved successfully',
+                data: dataResult.rows,
+                pagination: {
+                    current_page: pageNum,
+                    per_page: limitNum,
+                    total_items: total,
+                    total_pages: totalPages,
+                    has_next: pageNum < totalPages,
+                    has_prev: pageNum > 1
+                }
+            });
+        } else {
+            // Regular merchant view: require token_number
+            if (!token_number) {
+                return res.status(400).json({ error: 'token_number query parameter is required' });
+            }
+
+            if (!isValidTokenFormat(token_number)) {
+                return res.status(400).json({ error: 'Invalid token format. Expected: XXXX-XXXX-XXXX-XXXX' });
+            }
+
+            const sanitizedToken = sanitizeString(token_number, 255);
+            if (!sanitizedToken) {
+                return res.status(400).json({ error: 'Invalid token data' });
+            }
+
+            const query = 'SELECT * FROM withdrawals WHERE token_number = $1 ORDER BY created_at DESC LIMIT 100';
+            const result = await client.query(query, [sanitizedToken]);
+
+            return res.status(200).json({
+                success: true,
+                data: result.rows
+            });
+        }
 
     } catch (error: any) {
         console.error('Get withdrawals history error:', error);
@@ -339,7 +434,7 @@ router.get('/withdrawals', verifyApiAuth, async (req: Request, res: Response) =>
 // 4. Update Withdrawal Status (Superadmin only)
 router.put('/withdrawals/:id', verifyApiAuth, verifySuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, reason } = req.body;
     let client;
 
     try {
@@ -353,6 +448,10 @@ router.put('/withdrawals/:id', verifyApiAuth, verifySuperAdmin, async (req: Requ
             });
         }
 
+        if (status === 'rejected' && !reason) {
+            return res.status(400).json({ error: 'Reason is required when status is rejected' });
+        }
+
         client = await pool.connect();
 
         // Check if withdrawal exists
@@ -363,14 +462,14 @@ router.put('/withdrawals/:id', verifyApiAuth, verifySuperAdmin, async (req: Requ
             return res.status(404).json({ error: 'Withdrawal request not found' });
         }
 
-        // Update status
+        // Update status and reason
         const updateQuery = `
             UPDATE withdrawals
-            SET status = $1, updated_at = NOW()
-            WHERE id = $2::uuid
+            SET status = $1, reason = $2, updated_at = NOW()
+            WHERE id = $3::uuid
             RETURNING *
         `;
-        const result = await client.query(updateQuery, [status, id]);
+        const result = await client.query(updateQuery, [status, reason || null, id]);
 
         return res.status(200).json({
             success: true,
