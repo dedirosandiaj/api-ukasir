@@ -286,4 +286,45 @@ router.post('/cashier-transactions/:order_id/cancel', verifyApiAuth, async (req:
     }
 });
 
+// 4. Get Cashier Transactions List by token_number (Authenticated clients)
+router.get('/cashier-transactions', verifyApiAuth, async (req: Request, res: Response) => {
+    const { token_number } = req.query;
+    let client;
+
+    try {
+        if (!token_number) {
+            return res.status(400).json({ error: 'token_number query parameter is required' });
+        }
+
+        if (!isValidTokenFormat(token_number)) {
+            return res.status(400).json({ error: 'Invalid token format. Expected: XXXX-XXXX-XXXX-XXXX' });
+        }
+
+        const sanitizedToken = sanitizeString(token_number, 255);
+        if (!sanitizedToken) {
+            return res.status(400).json({ error: 'Invalid token data' });
+        }
+
+        client = await pool.connect();
+        
+        // Fetch last 100 transactions for this merchant token
+        const query = 'SELECT * FROM cashier_transactions WHERE token_number = $1 ORDER BY created_at DESC LIMIT 100';
+        const result = await client.query(query, [sanitizedToken]);
+
+        return res.status(200).json({
+            success: true,
+            data: result.rows
+        });
+
+    } catch (error: any) {
+        console.error('Get cashier transactions list error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 export default router;
