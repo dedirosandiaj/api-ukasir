@@ -82,6 +82,23 @@ const verifyApiAuth = (req: Request, res: Response, next: NextFunction): void =>
     next();
 };
 
+// Superadmin Authorization Middleware (Consistent with existing routes)
+const verifySuperAdmin = (req: Request, res: Response, next: NextFunction): void => {
+    const role = req.headers['x-role'] as string;
+    const superadminSecret = req.headers['x-superadmin-secret'] as string;
+    const envSecret = process.env.SUPERADMIN_SECRET;
+
+    const isSuperAdminRole = role === 'superadmin';
+    const isValidSecret = envSecret && superadminSecret === envSecret;
+
+    if (isSuperAdminRole || isValidSecret) {
+        next();
+    } else {
+        res.status(403).json({ error: 'Access denied. Superadmin permission required.' });
+    }
+};
+
+
 // 1. Create Cashier QRIS Transaction (Authenticated clients)
 router.post('/cashier-transactions', verifyApiAuth, async (req: Request, res: Response) => {
     const { token_number, gross_amount } = req.body;
@@ -318,6 +335,112 @@ router.get('/cashier-transactions', verifyApiAuth, async (req: Request, res: Res
 
     } catch (error: any) {
         console.error('Get cashier transactions list error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// 5. Get All Cashier Transactions (Superadmin only)
+router.get('/transactions', verifyApiAuth, verifySuperAdmin, async (req: Request, res: Response) => {
+    let client;
+    try {
+        client = await pool.connect();
+
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const offset = (page - 1) * limit;
+
+        const { search, merchant_name, payment_status, token_number } = req.query;
+
+        let whereConditions: string[] = [];
+        let queryParams: any[] = [];
+        let paramIndex = 1;
+
+        if (payment_status) {
+            whereConditions.push(`ct.payment_status = $${paramIndex}`);
+            queryParams.push(payment_status);
+            paramIndex++;
+        }
+
+        if (token_number) {
+            whereConditions.push(`ct.token_number = $${paramIndex}`);
+            queryParams.push(token_number);
+            paramIndex++;
+        }
+
+        if (merchant_name) {
+            whereConditions.push(`m.merchant_name ILIKE $${paramIndex}`);
+            queryParams.push(`%${merchant_name}%`);
+            paramIndex++;
+        }
+
+        if (search) {
+            whereConditions.push(`(
+                ct.order_id ILIKE $${paramIndex} OR 
+                ct.token_number ILIKE $${paramIndex} OR
+                m.merchant_name ILIKE $${paramIndex} OR 
+                m.name ILIKE $${paramIndex}
+            )`);
+            queryParams.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+        // Get total count
+        const countQuery = `
+            SELECT COUNT(*) 
+            FROM cashier_transactions ct
+            LEFT JOIN merchants m ON ct.token_number = m.token_number
+            ${whereClause}
+        `;
+        const countResult = await client.query(countQuery, queryParams);
+        const total = parseInt(countResult.rows[0].count);
+
+        // Get transactions details
+        const dataQuery = `
+            SELECT 
+                ct.id,
+                ct.order_id,
+                ct.token_number,
+                ct.gross_amount,
+                ct.payment_status,
+                ct.created_at,
+                ct.updated_at,
+                m.name as merchant_owner_name,
+                m.merchant_name as merchant_name
+            FROM cashier_transactions ct
+            LEFT JOIN merchants m ON ct.token_number = m.token_number
+            ${whereClause}
+            ORDER BY ct.created_at DESC
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+
+        queryParams.push(limit, offset);
+        const dataResult = await client.query(dataQuery, queryParams);
+
+        const totalPages = Math.ceil(total / limit);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Transactions retrieved successfully',
+            data: dataResult.rows,
+            pagination: {
+                current_page: page,
+                per_page: limit,
+                total_items: total,
+                total_pages: totalPages,
+                has_next: page < totalPages,
+                has_prev: page > 1
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Get all transactions error:', error);
         return res.status(500).json({
             error: 'Internal Server Error',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
