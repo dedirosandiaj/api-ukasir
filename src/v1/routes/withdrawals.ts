@@ -488,4 +488,99 @@ router.put('/withdrawals/:id', verifyApiAuth, verifySuperAdmin, async (req: Requ
     }
 });
 
+// 5. Reconcile Withdrawal (Superadmin only)
+router.get('/withdrawals/:id/reconcile', verifyApiAuth, verifySuperAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    let client;
+
+    try {
+        client = await pool.connect();
+
+        // Check if withdrawal exists and get merchant details
+        const checkQuery = `
+            SELECT w.*, m.merchant_name 
+            FROM withdrawals w 
+            LEFT JOIN merchants m ON w.token_number = m.token_number 
+            WHERE w.id = $1::uuid 
+            LIMIT 1
+        `;
+        const checkResult = await client.query(checkQuery, [id]);
+
+        if (checkResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Withdrawal request not found' });
+        }
+
+        const withdrawal = checkResult.rows[0];
+        const tokenNumber = withdrawal.token_number;
+
+        // Calculate total earned
+        const earnedQuery = `
+            SELECT COALESCE(SUM(gross_amount), 0) as total_earned 
+            FROM cashier_transactions 
+            WHERE token_number = $1 
+              AND payment_status IN ('settlement', 'capture', 'paid')
+        `;
+        const earnedRes = await client.query(earnedQuery, [tokenNumber]);
+        const totalEarned = parseFloat(earnedRes.rows[0].total_earned);
+
+        // Calculate total historically withdrawn (approved, completed)
+        const withdrawnHistoricalQuery = `
+            SELECT COALESCE(SUM(amount), 0) as total_withdrawn 
+            FROM withdrawals 
+            WHERE token_number = $1 
+              AND status IN ('approved', 'completed')
+        `;
+        const withdrawnHistoricalRes = await client.query(withdrawnHistoricalQuery, [tokenNumber]);
+        const totalHistoricallyWithdrawn = parseFloat(withdrawnHistoricalRes.rows[0].total_withdrawn);
+
+        // Calculate current available balance (before pending)
+        const currentAvailableBalance = totalEarned - totalHistoricallyWithdrawn;
+
+        // Calculate total pending withdrawals
+        const pendingQuery = `
+            SELECT COALESCE(SUM(amount), 0) as total_pending 
+            FROM withdrawals 
+            WHERE token_number = $1 
+              AND status = 'pending'
+        `;
+        const pendingRes = await client.query(pendingQuery, [tokenNumber]);
+        const totalPendingWithdrawals = parseFloat(pendingRes.rows[0].total_pending);
+
+        // Calculate validation (is available balance >= all pending requests combined?)
+        const requestedAmount = parseFloat(withdrawal.amount);
+        const isBalanced = currentAvailableBalance >= totalPendingWithdrawals;
+        const discrepancyAmount = isBalanced ? 0 : totalPendingWithdrawals - currentAvailableBalance;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                withdrawal_id: id,
+                token_number: tokenNumber,
+                merchant_name: withdrawal.merchant_name,
+                reconciliation: {
+                    total_earned_from_transactions: totalEarned,
+                    total_historically_withdrawn: totalHistoricallyWithdrawn,
+                    current_available_balance: currentAvailableBalance,
+                    total_pending_withdrawals: totalPendingWithdrawals,
+                    requested_amount: requestedAmount,
+                    is_balanced: isBalanced,
+                    discrepancy_amount: discrepancyAmount
+                },
+                status_message: isBalanced 
+                    ? "Withdrawal is valid and backed by sufficient transaction balance." 
+                    : "Warning: Insufficient transaction balance to cover all pending withdrawals."
+            }
+        });
+
+    } catch (error: any) {
+        console.error('Reconcile withdrawal error:', error);
+        return res.status(500).json({
+            error: 'Internal Server Error',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 export default router;
