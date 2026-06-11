@@ -136,3 +136,4 @@ model withdrawals {
   @@index([token_number])
   @@index([status])
 }
+

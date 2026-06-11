@@ -163,7 +163,15 @@ router.post('/cashier-transactions', verifyApiAuth, async (req: Request, res: Re
             }
         };
 
-        const chargeResponse = await core.charge(midtransPayload);
+        let chargeResponse;
+        if (process.env.MOCK_MIDTRANS === 'true') {
+            chargeResponse = {
+                actions: [{ name: 'generate-qr-code', url: 'https://mock.midtrans.com/qr/' + orderId }],
+                qr_string: '000201010211...mock...qr...' + orderId
+            };
+        } else {
+            chargeResponse = await core.charge(midtransPayload);
+        }
 
         // E. Save transaction details to database
         const query = `
