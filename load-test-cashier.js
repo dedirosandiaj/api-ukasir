@@ -12,12 +12,16 @@ const API_SECRET = __ENV.API_SECRET || 'your_default_api_secret';
 const TOKEN_NUMBER = __ENV.TOKEN_NUMBER || '1111-2222-3333-4444';
 
 export const options = {
-  // Skenario: 50 Virtual Users berjalan selama 30 detik
-  vus: 50,
-  duration: '30s',
+  // Skenario: 1000 Virtual Users berjalan selama 60 detik (stress test)
+  stages: [
+    { duration: '15s', target: 200 },   // Ramp up ke 200 VUs
+    { duration: '15s', target: 500 },   // Ramp up ke 500 VUs
+    { duration: '15s', target: 1000 },  // Ramp up ke 1000 VUs
+    { duration: '15s', target: 1000 },  // Tahan di 1000 VUs
+  ],
   thresholds: {
-    // 95% requests harus selesai di bawah 500ms
-    http_req_duration: ['p(95)<500'],
+    // 95% requests harus selesai di bawah 2000ms (lebih longgar untuk stress test)
+    http_req_duration: ['p(95)<2000'],
   },
 };
 
@@ -46,7 +50,7 @@ export default function () {
 
     const createHeaders = generateAuthHeaders(createPayload);
     
-    const createRes = http.post(`${BASE_URL}/api/v1/cashier-transactions`, JSON.stringify(createPayload), {
+    const createRes = http.post(`${BASE_URL}/v1/cashier-transactions`, JSON.stringify(createPayload), {
         headers: createHeaders
     });
 
