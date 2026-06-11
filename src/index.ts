@@ -67,12 +67,19 @@ app.get('/docs', (req: Request, res: Response) => {
 // Rate limiting - 100 requests per 15 minutes per IP
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 100,
+    max: process.env.MOCK_MIDTRANS === 'true' ? 0 : 100, // Disable limit (0) when load testing
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false
 });
-app.use(limiter);
+
+// Conditionally apply global rate limiter
+app.use((req, res, next) => {
+    if (process.env.MOCK_MIDTRANS === 'true') {
+        return next();
+    }
+    return limiter(req, res, next);
+});
 
 // Stricter rate limit for uploads - 20 uploads per 15 minutes
 const uploadLimiter = rateLimit({
