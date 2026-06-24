@@ -571,10 +571,17 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 body: JSON.stringify(duitkuPayload)
             });
             
-            const responseData = await response.json() as any;
+            const responseText = await response.text();
+            let responseData;
+            try {
+                responseData = JSON.parse(responseText);
+            } catch (e) {
+                console.error('Duitku API Raw Error:', responseText);
+                throw new Error(`Duitku error: ${responseText}`);
+            }
             
             if (responseData.statusCode !== '00') {
-                console.error('Duitku API Failed Response:', JSON.stringify(responseData));
+                console.error('Duitku API Failed Response:', responseText);
                 const errMsg = responseData.statusMessage || responseData.Message || 'Unknown error occurred in Duitku API';
                 throw new Error(`Duitku error: ${errMsg}`);
             }
