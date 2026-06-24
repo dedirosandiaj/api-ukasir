@@ -558,6 +558,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 merchantOrderId: orderId,
                 productDetails: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`,
                 email: sanitizedEmail,
+                paymentMethod: "", // Kosong agar memunculkan semua metode pembayaran di halaman Duitku
                 customerVaName: sanitizedName,
                 phoneNumber: sanitizedPhone,
                 callbackUrl,
