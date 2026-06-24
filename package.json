@@ -14,11 +14,13 @@
   "description": "",
   "dependencies": {
     "@types/express": "^5.0.6",
+    "angka-menjadi-terbilang": "^0.5.0",
     "aws-sdk": "^2.1693.0",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.0",
+    "google-tts-api": "^2.0.2",
     "helmet": "^8.1.0",
     "midtrans-client": "^1.4.3",
     "multer": "^2.1.1",
