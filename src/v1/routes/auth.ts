@@ -574,7 +574,9 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             const responseData = await response.json() as any;
             
             if (responseData.statusCode !== '00') {
-                throw new Error(`Duitku error: ${responseData.statusMessage}`);
+                console.error('Duitku API Failed Response:', JSON.stringify(responseData));
+                const errMsg = responseData.statusMessage || responseData.Message || 'Unknown error occurred in Duitku API';
+                throw new Error(`Duitku error: ${errMsg}`);
             }
             
             paymentUrl = responseData.paymentUrl;
