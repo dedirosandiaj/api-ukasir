@@ -544,10 +544,12 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             const isProduction = await getConfig('DUITKU_IS_PRODUCTION') === 'true';
             
             const apiUrl = isProduction 
-                ? 'https://api-prod.duitku.com/api/merchant/createInvoice' 
-                : 'https://api-sandbox.duitku.com/api/merchant/createInvoice';
+                ? 'https://passport.duitku.com/webapi/api/merchant/v2/inquiry' 
+                : 'https://sandbox.duitku.com/webapi/api/merchant/v2/inquiry';
                 
-            const signature = crypto.createHash('md5').update(`${merchantCode}${orderId}${packageAmount}${apiKey}`).digest('hex');
+            const signature = crypto.createHmac('sha256', apiKey)
+                .update(`${merchantCode}${orderId}${packageAmount}`)
+                .digest('hex');
             
             const callbackUrl = `${req.protocol}://${req.get('host')}/v1/duitku-notification`;
             const returnUrl = 'ukasir://';
@@ -558,6 +560,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 merchantOrderId: orderId,
                 productDetails: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`,
                 email: sanitizedEmail,
+                paymentMethod: "", // Kosong untuk memunculkan semua metode pembayaran
                 customerVaName: sanitizedName,
                 phoneNumber: sanitizedPhone,
                 callbackUrl,
@@ -1185,8 +1188,8 @@ router.post('/duitku-notification', async (req: Request, res: Response) => {
     }
 
     const expectedSignature = crypto
-        .createHash('md5')
-        .update(`${merchantCode}${amount}${merchantOrderId}${apiKey}`)
+        .createHmac('sha256', apiKey)
+        .update(`${merchantCode}${amount}${merchantOrderId}`)
         .digest('hex');
 
     if (signature !== expectedSignature) {
