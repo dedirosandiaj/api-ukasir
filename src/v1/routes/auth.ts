@@ -544,8 +544,8 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             const isProduction = await getConfig('DUITKU_IS_PRODUCTION') === 'true';
             
             const apiUrl = isProduction 
-                ? 'https://passport.duitku.com/webapi/api/merchant/v2/inquiry' 
-                : 'https://sandbox.duitku.com/webapi/api/merchant/v2/inquiry';
+                ? 'https://api-prod.duitku.com/api/merchant/createInvoice' 
+                : 'https://api-sandbox.duitku.com/api/merchant/createInvoice';
                 
             const signature = crypto.createHash('md5').update(`${merchantCode}${orderId}${packageAmount}${apiKey}`).digest('hex');
             
@@ -558,7 +558,6 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 merchantOrderId: orderId,
                 productDetails: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`,
                 email: sanitizedEmail,
-                paymentMethod: "", // Kosong agar memunculkan semua metode pembayaran di halaman Duitku
                 customerVaName: sanitizedName,
                 phoneNumber: sanitizedPhone,
                 callbackUrl,
