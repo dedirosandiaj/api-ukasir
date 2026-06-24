@@ -554,13 +554,15 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             const callbackUrl = `${req.protocol}://${req.get('host')}/v1/duitku-notification`;
             const returnUrl = 'ukasir://';
             
+            const duitkuPaymentMethod = req.body.paymentMethod || "VC"; // "VC" = Credit Card (Contoh), wajib diisi untuk v2/inquiry
+
             const duitkuPayload = {
                 merchantCode,
                 paymentAmount: packageAmount,
                 merchantOrderId: orderId,
                 productDetails: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`,
                 email: sanitizedEmail,
-                paymentMethod: "", // Kosong untuk memunculkan semua metode pembayaran
+                paymentMethod: duitkuPaymentMethod, // Wajib diisi kode metode pembayaran spesifik
                 customerVaName: sanitizedName,
                 phoneNumber: sanitizedPhone,
                 callbackUrl,
