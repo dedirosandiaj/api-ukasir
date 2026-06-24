@@ -46,6 +46,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'x-api-key', 'x-timestamp', 'x-signature']
 }));
 app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
 // Serve static files (uploads)
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

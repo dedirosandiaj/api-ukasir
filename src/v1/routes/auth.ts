@@ -488,7 +488,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
         // If trial, register with inactive status
         if (packageName === 'trial') {
             const insertQuery = `
-                INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_status, midtrans_order_id, register_date, status_active, device_id, device_name, device_type)
+                INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_status, pg_order_id, register_date, status_active, device_id, device_name, device_type)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'trial', 'paid', NULL, NOW(), false, $15, $16, $17)
                 RETURNING *
             `;
@@ -512,37 +512,81 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             });
         }
 
-        // If premium, create Midtrans transaction
-        const midtransOrderId = `ORDER-${Date.now()}`;
-        const transactionDetails = {
-            transaction_details: {
-                order_id: midtransOrderId,
-                gross_amount: packageAmount
-            },
-            customer_details: {
-                first_name: sanitizedName,
-                email: sanitizedEmail,
-                phone: sanitizedPhone
-            },
-            item_details: [{
-                id: packageName,
-                price: packageAmount,
-                quantity: 1,
-                name: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`
-            }]
-        };
+        // If premium, handle payment gateway
+        const activePaymentGateway = await getConfig('ACTIVE_PAYMENT_GATEWAY', 'midtrans');
+        let paymentUrl = '';
+        
+        if (activePaymentGateway === 'midtrans') {
+            const transactionDetails = {
+                transaction_details: {
+                    order_id: orderId,
+                    gross_amount: packageAmount
+                },
+                customer_details: {
+                    first_name: sanitizedName,
+                    email: sanitizedEmail,
+                    phone: sanitizedPhone
+                },
+                item_details: [{
+                    id: packageName,
+                    price: packageAmount,
+                    quantity: 1,
+                    name: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`
+                }]
+            };
 
-        const snap = await getMidtransSnap();
-        const transaction = await snap.createTransaction(transactionDetails);
-        const paymentUrl = transaction.redirect_url;
+            const snap = await getMidtransSnap();
+            const transaction = await snap.createTransaction(transactionDetails);
+            paymentUrl = transaction.redirect_url;
+        } else if (activePaymentGateway === 'duitku') {
+            const merchantCode = await getConfig('DUITKU_MERCHANT_CODE');
+            const apiKey = await getConfig('DUITKU_API_KEY');
+            const isProduction = await getConfig('DUITKU_IS_PRODUCTION') === 'true';
+            
+            const apiUrl = isProduction 
+                ? 'https://passport.duitku.com/webapi/api/merchant/v2/inquiry' 
+                : 'https://sandbox.duitku.com/webapi/api/merchant/v2/inquiry';
+                
+            const signature = crypto.createHash('md5').update(`${merchantCode}${orderId}${packageAmount}${apiKey}`).digest('hex');
+            
+            const callbackUrl = `${req.protocol}://${req.get('host')}/v1/duitku-notification`;
+            const returnUrl = 'ukasir://';
+            
+            const duitkuPayload = {
+                merchantCode,
+                paymentAmount: packageAmount,
+                merchantOrderId: orderId,
+                productDetails: `Ukasir ${packageName.charAt(0).toUpperCase() + packageName.slice(1)} Package`,
+                email: sanitizedEmail,
+                customerVaName: sanitizedName,
+                phoneNumber: sanitizedPhone,
+                callbackUrl,
+                returnUrl,
+                signature
+            };
+            
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(duitkuPayload)
+            });
+            
+            const responseData = await response.json() as any;
+            
+            if (responseData.statusCode !== '00') {
+                throw new Error(`Duitku error: ${responseData.statusMessage}`);
+            }
+            
+            paymentUrl = responseData.paymentUrl;
+        }
 
         // Save to database with pending status and inactive status_active
         const insertQuery = `
-            INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_url, payment_status, midtrans_order_id, register_date, status_active, device_id, device_name, device_type)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', $15, 'pending', $16, NOW(), false, $17, $18, $19)
+            INSERT INTO merchants (token_number, order_id, name, merchant_name, email, phone, province, city, district, subdistrict, postal_code, street_address, package, amount, status, payment_url, payment_status, pg_order_id, register_date, status_active, device_id, device_name, device_type)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', $15, 'pending', NULL, NOW(), false, $16, $17, $18)
             RETURNING *
         `;
-        const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, paymentUrl, midtransOrderId, sanitizedDeviceId, sanitizedDeviceName, sanitizedDeviceType]);
+        const result = await client.query(insertQuery, [token, orderId, sanitizedName, sanitizedMerchantName, sanitizedEmail, sanitizedPhone, sanitizedProvince, sanitizedCity, sanitizedDistrict, sanitizedSubdistrict, sanitizedPostalCode, sanitizedStreetAddress, packageName, packageAmount, paymentUrl, sanitizedDeviceId, sanitizedDeviceName, sanitizedDeviceType]);
 
         // Send payment email (payment button only, no activation link)
         await sendPaymentEmail(sanitizedEmail, sanitizedName, sanitizedMerchantName || sanitizedName, paymentUrl, packageAmount, packageName);
@@ -558,7 +602,6 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 status: 'pending',
                 payment_status: 'pending',
                 payment_url: paymentUrl,
-                midtrans_order_id: midtransOrderId,
                 activation_url: activationLink,
                 instruction: 'Please complete payment within 24 hours'
             }
@@ -692,7 +735,7 @@ router.get('/merchants', verifyApiAuth, async (req: Request, res: Response) => {
                 status,
                 payment_method,
                 payment_status,
-                midtrans_order_id,
+                pg_order_id,
                 paid_at,
                 register_date,
                 status_active,
@@ -1024,8 +1067,8 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
             });
         }
 
-        // Find merchant by midtrans_order_id and lock the row
-        const findQuery = 'SELECT * FROM merchants WHERE midtrans_order_id = $1 FOR UPDATE';
+        // Find merchant by order_id or pg_order_id and lock the row
+        const findQuery = 'SELECT * FROM merchants WHERE order_id = $1 OR pg_order_id = $1 FOR UPDATE';
         const findResult = await client.query(findQuery, [orderId]);
 
         if (findResult.rows.length === 0) {
@@ -1075,7 +1118,7 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
         const updateQuery = `
             UPDATE merchants 
             SET status = $1, payment_status = $2, status_active = $3, paid_at = $4, payment_method = $5, exclusive_merchant = $6, updated_at = NOW()
-            WHERE midtrans_order_id = $7
+            WHERE order_id = $7 OR pg_order_id = $7
             RETURNING *
         `;
         const result = await client.query(updateQuery, [newStatus, newPaymentStatus, statusActive, paidAt, paymentType, exclusiveMerchant, orderId]);
@@ -1122,6 +1165,109 @@ router.post('/payment-notification', async (req: Request, res: Response) => {
     }
 });
 
+// Duitku Webhook Handler
+router.post('/duitku-notification', async (req: Request, res: Response) => {
+    const { merchantCode, amount, merchantOrderId, signature, reference, resultCode } = req.body;
+
+    const apiKey = await getConfig('DUITKU_API_KEY');
+    
+    if (!merchantCode || !amount || !merchantOrderId || !signature) {
+        return res.status(400).json({ error: 'Bad Request' });
+    }
+
+    const expectedSignature = crypto
+        .createHash('md5')
+        .update(`${merchantCode}${amount}${merchantOrderId}${apiKey}`)
+        .digest('hex');
+
+    if (signature !== expectedSignature) {
+        console.error('Invalid Duitku signature');
+        return res.status(403).json({ error: 'Invalid signature' });
+    }
+
+    console.log('Duitku payment notification received:', req.body);
+
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        // Find merchant by order_id and lock the row
+        const findQuery = 'SELECT * FROM merchants WHERE order_id = $1 FOR UPDATE';
+        const findResult = await client.query(findQuery, [merchantOrderId]);
+
+        if (findResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        const merchant = findResult.rows[0];
+
+        let newStatus = merchant.status;
+        let newPaymentStatus = 'pending';
+        let statusActive = merchant.status_active;
+        let paidAt = merchant.paid_at;
+        let exclusiveMerchant = merchant.exclusive_merchant;
+
+        if (resultCode === '00') {
+            // Payment successful
+            newPaymentStatus = 'paid';
+            newStatus = 'premium';
+            statusActive = true;
+            paidAt = new Date();
+
+            if (merchant.package === 'premium' && !exclusiveMerchant) {
+                await client.query('LOCK TABLE merchants IN SHARE ROW EXCLUSIVE MODE');
+                const maxQuery = 'SELECT COALESCE(MAX(exclusive_merchant), 0) as max_val FROM merchants';
+                const maxResult = await client.query(maxQuery);
+                const maxVal = parseInt(maxResult.rows[0].max_val, 10);
+                if (maxVal < 100) {
+                    exclusiveMerchant = maxVal + 1;
+                }
+            }
+        } else if (resultCode === '01') {
+            newPaymentStatus = 'failed';
+            newStatus = 'failed';
+        }
+
+        // Update database
+        const updateQuery = `
+            UPDATE merchants 
+            SET status = $1, payment_status = $2, status_active = $3, paid_at = $4, exclusive_merchant = $5, updated_at = NOW()
+            WHERE order_id = $6
+            RETURNING *
+        `;
+        const result = await client.query(updateQuery, [newStatus, newPaymentStatus, statusActive, paidAt, exclusiveMerchant, merchantOrderId]);
+        await client.query('COMMIT');
+
+        console.log(`Duitku Payment updated: ${merchantOrderId} - Code: ${resultCode}`);
+
+        // Send email if successful
+        if (resultCode === '00') {
+            const updatedMerchant = result.rows[0];
+            const activationLink = `${req.protocol}://${req.get('host')}/v1/activate-merchant?token=${updatedMerchant.token_number}`;
+            await sendPaymentSuccessEmail(
+                updatedMerchant.email,
+                updatedMerchant.name,
+                updatedMerchant.merchant_name,
+                updatedMerchant.token_number,
+                updatedMerchant.package,
+                activationLink
+            );
+        }
+
+        return res.json({ status: 'ok' });
+    } catch (error: any) {
+        console.error('Duitku webhook error:', error);
+        if (client) {
+            try { await client.query('ROLLBACK'); } catch (e) {}
+        }
+        return res.status(500).json({ error: 'Internal Server Error' });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 // Check Payment Status
 router.get('/payment-status/:order_id', async (req: Request, res: Response) => {
     const { order_id } = req.params;
@@ -1130,7 +1276,7 @@ router.get('/payment-status/:order_id', async (req: Request, res: Response) => {
     try {
         client = await pool.connect();
 
-        const query = 'SELECT token_number, order_id, package, amount, status, payment_status, payment_url, paid_at FROM merchants WHERE order_id = $1 OR midtrans_order_id = $1';
+        const query = 'SELECT token_number, order_id, package, amount, status, payment_status, payment_url, paid_at FROM merchants WHERE order_id = $1 OR pg_order_id = $1';
         const result = await client.query(query, [order_id]);
 
         if (result.rows.length === 0) {
