@@ -592,6 +592,69 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
             }
             
             paymentUrl = responseData.paymentUrl;
+        } else if (activePaymentGateway === 'doku') {
+            const clientId = await getConfig('DOKU_CLIENT_ID');
+            const secretKey = await getConfig('DOKU_SECRET_KEY');
+            const isProduction = await getConfig('DOKU_IS_PRODUCTION') === 'true';
+            
+            const apiUrl = isProduction 
+                ? 'https://api.doku.com' 
+                : 'https://api-sandbox.doku.com';
+            const targetPath = '/checkout/v1/payment';
+            
+            const requestId = crypto.randomUUID();
+            const timestamp = new Date().toISOString().slice(0, 19) + 'Z'; // UTC
+            
+            const dokuPayload = {
+                order: {
+                    amount: packageAmount,
+                    invoice_number: orderId,
+                    callback_url: `${req.protocol}://${req.get('host')}/v1/doku-notification`,
+                    auto_redirect: true
+                },
+                payment: {
+                    payment_due_date: 60
+                },
+                customer: {
+                    name: sanitizedName,
+                    email: sanitizedEmail,
+                    phone: sanitizedPhone
+                }
+            };
+            
+            const bodyString = JSON.stringify(dokuPayload);
+            const digest = crypto.createHash('sha256').update(bodyString).digest('base64');
+            const stringToSign = `Client-Id:${clientId}\nRequest-Id:${requestId}\nRequest-Timestamp:${timestamp}\nRequest-Target:${targetPath}\nDigest:${digest}`;
+            const signature = crypto.createHmac('sha256', secretKey).update(stringToSign).digest('base64');
+            const finalSignature = `HMACSHA256=${signature}`;
+            
+            const response = await fetch(`${apiUrl}${targetPath}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Client-Id': clientId,
+                    'Request-Id': requestId,
+                    'Request-Timestamp': timestamp,
+                    'Signature': finalSignature
+                },
+                body: bodyString
+            });
+            
+            const responseText = await response.text();
+            let responseData;
+            try {
+                responseData = JSON.parse(responseText);
+            } catch (e) {
+                console.error('Doku API Raw Error:', responseText);
+                throw new Error(`Doku error: ${responseText}`);
+            }
+            
+            if (!response.ok || !responseData.response?.payment?.url) {
+                console.error('Doku API Failed Response:', responseText);
+                throw new Error(`Doku error: ${responseData.error?.message || responseData.message?.[0] || responseText}`);
+            }
+            
+            paymentUrl = responseData.response.payment.url;
         }
 
         // Save to database with pending status and inactive status_active
@@ -1273,6 +1336,123 @@ router.post('/duitku-notification', async (req: Request, res: Response) => {
         return res.json({ status: 'ok' });
     } catch (error: any) {
         console.error('Duitku webhook error:', error);
+        if (client) {
+            try { await client.query('ROLLBACK'); } catch (e) {}
+        }
+        return res.status(500).json({ error: 'Internal Server Error' });
+    } finally {
+        if (client) client.release();
+    }
+});
+
+// Doku Webhook Handler
+router.post('/doku-notification', async (req: Request, res: Response) => {
+    const clientIdHeader = req.headers['client-id'] as string;
+    const requestIdHeader = req.headers['request-id'] as string;
+    const requestTimestampHeader = req.headers['request-timestamp'] as string;
+    const signatureHeader = req.headers['signature'] as string;
+
+    const secretKey = await getConfig('DOKU_SECRET_KEY');
+
+    if (!clientIdHeader || !requestIdHeader || !requestTimestampHeader || !signatureHeader) {
+        return res.status(400).json({ error: 'Missing Doku headers' });
+    }
+
+    const bodyString = JSON.stringify(req.body);
+    const digest = crypto.createHash('sha256').update(bodyString).digest('base64');
+    const targetPath = req.originalUrl;
+    const stringToSign = `Client-Id:${clientIdHeader}\nRequest-Id:${requestIdHeader}\nRequest-Timestamp:${requestTimestampHeader}\nRequest-Target:${targetPath}\nDigest:${digest}`;
+    
+    const expectedSignature = crypto.createHmac('sha256', secretKey).update(stringToSign).digest('base64');
+    const finalExpectedSignature = `HMACSHA256=${expectedSignature}`;
+
+    if (signatureHeader !== finalExpectedSignature) {
+        console.error('Invalid Doku signature');
+        return res.status(403).json({ error: 'Invalid signature' });
+    }
+
+    console.log('Doku payment notification received:', req.body);
+
+    const { order, transaction } = req.body;
+    if (!order || !order.invoice_number || !transaction || !transaction.status) {
+        return res.status(400).json({ error: 'Invalid payload' });
+    }
+
+    const merchantOrderId = order.invoice_number;
+    const paymentStatus = transaction.status.toUpperCase(); // SUCCESS, FAILED
+
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const findQuery = 'SELECT * FROM merchants WHERE order_id = $1 FOR UPDATE';
+        const findResult = await client.query(findQuery, [merchantOrderId]);
+
+        if (findResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        const merchant = findResult.rows[0];
+
+        let newStatus = merchant.status;
+        let newPaymentStatus = 'pending';
+        let statusActive = merchant.status_active;
+        let paidAt = merchant.paid_at;
+        let exclusiveMerchant = merchant.exclusive_merchant;
+
+        if (paymentStatus === 'SUCCESS') {
+            newPaymentStatus = 'paid';
+            newStatus = 'premium';
+            statusActive = true;
+            paidAt = new Date();
+
+            if (merchant.package === 'premium' && !exclusiveMerchant) {
+                await client.query('LOCK TABLE merchants IN SHARE ROW EXCLUSIVE MODE');
+                const maxQuery = 'SELECT COALESCE(MAX(exclusive_merchant), 0) as max_val FROM merchants';
+                const maxResult = await client.query(maxQuery);
+                const maxVal = parseInt(maxResult.rows[0].max_val, 10);
+                if (maxVal < 100) {
+                    exclusiveMerchant = maxVal + 1;
+                }
+            }
+        } else if (paymentStatus === 'FAILED') {
+            newPaymentStatus = 'failed';
+            newStatus = 'failed';
+        } else {
+            // Keep current status if not success/failed (e.g. pending)
+            newPaymentStatus = merchant.payment_status;
+            newStatus = merchant.status;
+        }
+
+        const updateQuery = `
+            UPDATE merchants 
+            SET status = $1, payment_status = $2, status_active = $3, paid_at = $4, exclusive_merchant = $5, updated_at = NOW()
+            WHERE order_id = $6
+            RETURNING *
+        `;
+        const result = await client.query(updateQuery, [newStatus, newPaymentStatus, statusActive, paidAt, exclusiveMerchant, merchantOrderId]);
+        await client.query('COMMIT');
+
+        console.log(`Doku Payment updated: ${merchantOrderId} - Status: ${paymentStatus}`);
+
+        if (paymentStatus === 'SUCCESS') {
+            const updatedMerchant = result.rows[0];
+            const activationLink = `${req.protocol}://${req.get('host')}/v1/activate-merchant?token=${updatedMerchant.token_number}`;
+            await sendPaymentSuccessEmail(
+                updatedMerchant.email,
+                updatedMerchant.name,
+                updatedMerchant.merchant_name,
+                updatedMerchant.token_number,
+                updatedMerchant.package,
+                activationLink
+            );
+        }
+
+        return res.json({ status: 'ok' });
+    } catch (error: any) {
+        console.error('Doku webhook error:', error);
         if (client) {
             try { await client.query('ROLLBACK'); } catch (e) {}
         }
