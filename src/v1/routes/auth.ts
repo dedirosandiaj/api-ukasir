@@ -609,7 +609,7 @@ router.post('/register-merchant', verifyApiAuth, async (req: Request, res: Respo
                 order: {
                     amount: packageAmount,
                     invoice_number: orderId,
-                    callback_url: `${req.protocol}://${req.get('host')}/v1/doku-notification`,
+                    callback_url: `${req.protocol}://${req.get('host')}/v1/payment-status/${orderId}`,
                     auto_redirect: true
                 },
                 payment: {
