@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
 
@@ -13,7 +14,47 @@ const pool = new Pool({
 
 // PONYTAIL MODE: Ultra lazy, minimum abstraction, maximum performance.
 
-router.get('/regions/provinces', async (req: Request, res: Response) => {
+// HMAC Authentication Middleware
+const verifyApiAuth = (req: Request, res: Response, next: Function): void => {
+    const API_KEY = process.env.API_KEY;
+    const API_SECRET = process.env.API_SECRET;
+    const apiKey = req.headers['x-api-key'] as string;
+    const timestamp = req.headers['x-timestamp'] as string;
+    const signature = req.headers['x-signature'] as string;
+
+    if (!apiKey || !timestamp || !signature) {
+        res.status(401).json({ error: 'Missing authentication headers' });
+        return;
+    }
+
+    if (apiKey !== API_KEY) {
+        res.status(401).json({ error: 'Invalid API key' });
+        return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const reqTime = parseInt(timestamp, 10);
+    if (isNaN(reqTime) || Math.abs(now - reqTime) > 300) {
+        res.status(401).json({ error: 'Request expired or invalid timestamp' });
+        return;
+    }
+
+    const bodyString = JSON.stringify(req.body || {});
+    const payload = `${apiKey}:${timestamp}:${bodyString}`;
+    const expectedSig = crypto
+        .createHmac('sha256', API_SECRET!)
+        .update(payload)
+        .digest('hex');
+
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+        res.status(401).json({ error: 'Invalid signature' });
+        return;
+    }
+
+    next();
+};
+
+router.get('/regions/provinces', verifyApiAuth, async (req: Request, res: Response) => {
     try {
         const result = await pool.query('SELECT id, name FROM provinces ORDER BY name ASC');
         return res.status(200).json({ success: true, data: result.rows });
@@ -22,7 +63,7 @@ router.get('/regions/provinces', async (req: Request, res: Response) => {
     }
 });
 
-router.get('/regions/cities', async (req: Request, res: Response) => {
+router.get('/regions/cities', verifyApiAuth, async (req: Request, res: Response) => {
     const { province_id } = req.query;
     if (!province_id) return res.status(400).json({ success: false, error: 'province_id is required' });
 
@@ -34,7 +75,7 @@ router.get('/regions/cities', async (req: Request, res: Response) => {
     }
 });
 
-router.get('/regions/districts', async (req: Request, res: Response) => {
+router.get('/regions/districts', verifyApiAuth, async (req: Request, res: Response) => {
     const { city_id } = req.query;
     if (!city_id) return res.status(400).json({ success: false, error: 'city_id is required' });
 
@@ -46,7 +87,7 @@ router.get('/regions/districts', async (req: Request, res: Response) => {
     }
 });
 
-router.get('/regions/villages', async (req: Request, res: Response) => {
+router.get('/regions/villages', verifyApiAuth, async (req: Request, res: Response) => {
     const { district_id } = req.query;
     if (!district_id) return res.status(400).json({ success: false, error: 'district_id is required' });
 
