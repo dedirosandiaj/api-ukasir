@@ -28,6 +28,7 @@ model merchants {
   payment_url      String?   @db.VarChar(500)
   payment_status   String    @default("pending") @db.VarChar(50)
   midtrans_order_id String?  @db.VarChar(255)
+  pg_order_id      String?   @db.VarChar(255)
   paid_at          DateTime? @db.Timestamptz(6)
   register_date    DateTime  @default(now()) @db.Timestamp(6)
   status_active    Boolean   @default(false)
@@ -138,3 +139,34 @@ model withdrawals {
   @@index([status])
 }
 
+model provinces {
+  id   String @id @db.VarChar(10)
+  name String @db.VarChar(255)
+
+  @@index([name])
+}
+
+model regencies {
+  id          String @id @db.VarChar(10)
+  province_id String @db.VarChar(10)
+  name        String @db.VarChar(255)
+
+  @@index([province_id])
+}
+
+model districts {
+  id         String @id @db.VarChar(10)
+  regency_id String @db.VarChar(10)
+  name       String @db.VarChar(255)
+
+  @@index([regency_id])
+}
+
+model villages {
+  id          String  @id @db.VarChar(20)
+  district_id String  @db.VarChar(10)
+  name        String  @db.VarChar(255)
+  postal_code String? @db.VarChar(10)
+
+  @@index([district_id])
+}

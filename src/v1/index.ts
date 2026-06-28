@@ -9,6 +9,7 @@ import cashierTransactionRoutes from './routes/cashier_transactions';
 import withdrawalRoutes from './routes/withdrawals';
 import soundRoutes from './routes/sounds';
 import backupRoutes from './routes/backups';
+import regionsRoutes from './routes/regions';
 
 const router = Router();
 
@@ -23,5 +24,6 @@ router.use(cashierTransactionRoutes);
 router.use(withdrawalRoutes);
 router.use(soundRoutes);
 router.use(backupRoutes);
+router.use(regionsRoutes);
 
 export default router;
